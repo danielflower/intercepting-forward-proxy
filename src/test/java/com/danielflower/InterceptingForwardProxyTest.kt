@@ -1,19 +1,24 @@
 package com.danielflower
 
+import io.muserver.ContentTypes
 import io.muserver.HttpsConfigBuilder
 import io.muserver.Method
 import io.muserver.MuServerBuilder
 import io.muserver.MuServerBuilder.httpsServer
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.net.Proxy
 import java.net.URI
+import java.nio.charset.StandardCharsets
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 
@@ -81,6 +86,45 @@ class InterceptingForwardProxyTest {
             target.stop()
         }
     }
+
+    @Test
+    fun `it can proxy chunked request bodies`() {
+
+        val target = anHttpsServer()
+            .addHandler(Method.POST, "/hey") { req, resp, _ ->
+                resp.write("A target says what? ${req.readBodyAsString()}")
+            }
+            .start()
+
+        try {
+            val listener = object : RequestStreamListener {}
+            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+                val client = okHttpClient(proxy)
+                for (i in 1..2) {
+                    val body = "0123456789".repeat(10000 * i)
+                    client.call(target.uri().resolve("/hey").toRequest()
+                        .post(object : RequestBody() {
+                            override fun contentType() = "text/plain;charset=utf-8".toMediaType()
+                            override fun writeTo(sink: BufferedSink) {
+                                sink.writeString("你好 ", StandardCharsets.UTF_8)
+                                sink.flush()
+                                sink.writeString(body, StandardCharsets.UTF_8)
+                                sink.flush()
+                                sink.writeString(" The final chunk", StandardCharsets.UTF_8)
+                            }
+                        })
+                    ).use { resp ->
+                        assertThat(resp.code, equalTo(200))
+                        assertThat(resp.body?.string(), equalTo("A target says what? 你好 $body The final chunk"))
+                    }
+                }
+            }
+        } finally {
+            target.stop()
+        }
+    }
+
+
 
     private fun okHttpClient(proxy: InterceptingForwardProxy): OkHttpClient {
         val trustManager = InterceptingForwardProxy.createTrustManager()

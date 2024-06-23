@@ -2,6 +2,18 @@ package com.danielflower
 
 import java.text.ParseException
 
+internal const val SP = 32.toByte()
+internal const val CR = 13.toByte()
+internal const val LF = 10.toByte()
+private const val HTAB = 9.toByte()
+private const val A = 65.toByte()
+private const val Z = 90.toByte()
+internal const val COLON = 58.toByte()
+internal val COLON_SP = byteArrayOf(COLON, SP)
+internal val CRLF = byteArrayOf(CR, LF)
+private const val ZERO = 48.toByte()
+private const val NINE = 57.toByte()
+
 class Http1RequestParser {
 
     private var remainingBytesToProxy: Long = 0L
@@ -16,18 +28,15 @@ class Http1RequestParser {
         var i = offset
         while (i < offset + length) {
             val b = bytes[i]
-            println(">>> i=$i state=$state b=$b (${b.toChar()})")
-
             when (state) {
                 ParseState.START -> {
-                    if (b.isTChar()) {
+                    if (b.isUpperCase()) {
                         state = ParseState.METHOD
-                        buffer.setLength(0)
                         buffer.appendChar(b)
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.METHOD -> {
-                    if (b.isTChar()) {
+                    if (b.isUpperCase()) {
                         buffer.appendChar(b)
                     } else if (b.isSpace()) {
                         request.method = buffer.consume()
@@ -164,20 +173,18 @@ class Http1RequestParser {
             return this == 33.toByte()
                     || (this in 35.toByte()..39.toByte())
                     || this == 42.toByte() || this == 43.toByte() || this == 45.toByte() || this == 46.toByte()
-                    || (this in 48.toByte()..57.toByte()) // 0-9
-                    || (this in 65.toByte()..90.toByte()) // A-Z
+                    || (this in ZERO..NINE) // 0-9
+                    || (this in A..Z) // A-Z
                     || (this in 94.toByte()..122.toByte()) // ^, ), `, a-z
                     || this == 124.toByte() || this == 126.toByte()
         }
-        private fun Byte.isSpace() = this == 32.toByte()
-        private fun Byte.isCR() = this == 13.toByte()
-        private fun Byte.isLF() = this == 10.toByte()
-        private fun Byte.isHtab() = this == 9.toByte()
+        private fun Byte.isUpperCase() = this in A..Z
+        private fun Byte.isSpace() = this == SP
+        private fun Byte.isCR() = this == CR
+        private fun Byte.isLF() = this == LF
+        private fun Byte.isHtab() = this == HTAB
         private fun Byte.isOWS() = this.isSpace() || this.isHtab()
-        private fun Byte.toLower() : Byte {
-            return if (this < 65 || this > 90) this
-            else (this + 32).toByte()
-        }
+        private fun Byte.toLower() : Byte = if (this < A || this > Z) this else (this + 32).toByte()
         private fun StringBuilder.appendChar(b: Byte) {
             this.append(b.toInt().toChar())
         }
