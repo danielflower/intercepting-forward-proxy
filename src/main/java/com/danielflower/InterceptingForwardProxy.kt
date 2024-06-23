@@ -46,15 +46,17 @@ class InterceptingForwardProxy private constructor(
          * @param shutdownExecutorOnClose if true, then when [close] is called the executorServer will also be closed.
          * Default is `true`.
          * @param sslContext the SSL context to use, which should include a trust store to verify connections to target
-         * servers and a key manager for the TLS server that clients connect to. The default is `SSLContext.getDefault()`.
+         * servers and a key manager for the TLS server that clients connect to.
          * See [createTrustManager] and [createSSLContext] for a couple of helper methods that allow loading these from
          * the classpath.
          * @param connectionInterceptor a listener that allows you to allow or deny connections, inspect requests and
          * body data, and change request parameters such as headers.
          */
-        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLocalHost(), connectionInterceptor: ConnectionInterceptor, backlog: Int = 50,
+        @JvmStatic
+        @JvmOverloads
+        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLocalHost(), backlog: Int = 50,
                   executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true,
-                  sslContext: SSLContext = SSLContext.getDefault()): InterceptingForwardProxy {
+                  sslContext: SSLContext, connectionInterceptor: ConnectionInterceptor): InterceptingForwardProxy {
             val socketServer = ServerSocket(port, backlog, bindAddress)
             val proxy = InterceptingForwardProxy(
                 socketServer, executorService, shutdownExecutorOnClose,
@@ -67,6 +69,7 @@ class InterceptingForwardProxy private constructor(
         /**
          * Creates an SSL Context by loading a key store from the classpath
          */
+        @JvmStatic
         fun createSSLContext(type: String = "PKCS12", classpathPath: String, password: CharArray, trustManager: TrustManager) : SSLContext {
             val keyStore = KeyStore.getInstance(type)
             InterceptingForwardProxy::class.java.getResourceAsStream(classpathPath).use { keyStoreStream ->
@@ -82,6 +85,7 @@ class InterceptingForwardProxy private constructor(
         /**
          * Creates a trust manager by loading a CA file from the classpath
          */
+        @JvmStatic
         fun createTrustManager(type: String = "PKCS12", classpathPath: String, password: CharArray): X509TrustManager {
             val certificateAuthorityStore = KeyStore.getInstance(type)
             InterceptingForwardProxy::class.java.getResourceAsStream(classpathPath).use { caStream ->
