@@ -1,11 +1,10 @@
 package com.danielflower
 
-import java.io.OutputStream
-import java.nio.charset.StandardCharsets
 import java.text.ParseException
 
 class Http1RequestParser {
 
+    private var remainingBytesToProxy: Long = 0L
     private var state : ParseState = ParseState.START
     private var buffer = StringBuilder()
     private var request : HttpRequest = HttpRequest.empty()
@@ -101,15 +100,30 @@ class Http1RequestParser {
                 ParseState.HEADERS_ENDING -> {
                     if (b.isLF()) {
                         val req = request
-                        if (req.hasBody()) {
-                            state = ParseState.BODY
+                        val contentLength = req.contentLength()
+                        if (contentLength != null && contentLength > 0) {
+                            state = ParseState.FIXED_SIZE_BODY
+                            this.remainingBytesToProxy = contentLength
+                        } else if (req.hasChunkedBody()) {
+                            state = ParseState.CHUNK_START
                         } else {
                             onRequestEnded()
                         }
                         listener.onRequestHeadersReady(req)
                     } else throw ParseException("state=$state b=$b", i)
                 }
-                ParseState.BODY -> TODO()
+                ParseState.FIXED_SIZE_BODY -> {
+                    if (remainingBytesToProxy == 0L) {
+                        onRequestEnded()
+                    } else {
+                        val numberToSendNow = minOf(remainingBytesToProxy, length.toLong()).toInt()
+                        listener.onBytesToProxy(bytes, offset + i, numberToSendNow)
+                        i += numberToSendNow - 1 // subtracting one because there is an i++ below
+                    }
+                }
+                ParseState.CHUNK_START -> {
+
+                }
             }
             i++
         }
@@ -136,7 +150,8 @@ class Http1RequestParser {
         HEADER_VALUE(RequestPart.HEADERS),
         HEADER_VALUE_ENDING(RequestPart.HEADERS),
         HEADERS_ENDING(RequestPart.HEADERS),
-        BODY(RequestPart.BODY),
+        FIXED_SIZE_BODY(RequestPart.BODY),
+        CHUNK_START(RequestPart.BODY),
     }
 
     companion object {
@@ -175,48 +190,7 @@ class Http1RequestParser {
 }
 
 interface RequestStreamListener {
-    fun onRequestHeadersReady(request: HttpRequest)
-    fun onBytesToProxy(array: ByteArray, offset: Int, length: Int)
-}
-
-data class HttpRequest(var method: String, var url: String, var httpVersion: String, private val headers: MutableList<Pair<String,String>> = mutableListOf()) {
-    fun hasBody(): Boolean {
-        val contentLength = header("content-length")?.toLongOrNull()
-        if (contentLength != null && contentLength > 0L) return true
-        return header("transfer-encoding") == "chunked"
-    }
-
-    // note: all header names are converted to lowercase at the parse stage
-    fun header(name: String) : String? = headers.firstOrNull { it.first == name }?.second
-
-    fun hasHeader(name: String) = headers.any { it.first == name }
-    fun addHeader(name: String, value: String) {
-        headers.addLast(Pair(name, value))
-    }
-
-    fun writeTo(out: OutputStream) {
-        out.write(method.headerBytes())
-        out.write(' '.code)
-        out.write(url.headerBytes())
-        out.write(' '.code)
-        out.write(httpVersion.headerBytes())
-        out.crlf()
-        for (header in headers) {
-            out.write(header.first.headerBytes())
-            out.write(byteArrayOf(58.toByte(), 32.toByte()))
-            out.write(header.second.headerBytes())
-            out.crlf()
-        }
-        out.crlf()
-    }
-
-    companion object {
-        private fun OutputStream.crlf() {
-            this.write(byteArrayOf(13.toByte(), 10.toByte()))
-        }
-        private fun String.headerBytes() = this.toByteArray(StandardCharsets.US_ASCII)
-        fun empty() = HttpRequest("", "", "")
-    }
-
+    fun onRequestHeadersReady(request: HttpRequest) {}
+    fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {}
 }
 

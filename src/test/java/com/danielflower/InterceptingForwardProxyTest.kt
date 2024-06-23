@@ -1,14 +1,17 @@
 package com.danielflower
 
 import io.muserver.HttpsConfigBuilder
+import io.muserver.Method
 import io.muserver.MuServerBuilder
 import io.muserver.MuServerBuilder.httpsServer
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers.equalTo
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.net.InetAddress
 import java.net.Proxy
 import java.net.URI
 import javax.net.ssl.SSLContext
@@ -19,15 +22,11 @@ class InterceptingForwardProxyTest {
 
 
     @Test
-    fun `it can proxy stuff`() {
-
+    fun `it can proxy requests without bodies`() {
 
         val target = anHttpsServer()
-            .addHandler { req, resp ->
-                println("Got $req with ${req.headers()}")
-                resp.status(200)
+            .addHandler(Method.GET, "/hey") { req, resp, _ ->
                 resp.write("A target says what? ${req.headers().get("added-by-interceptor")}")
-                true
             }
             .start()
 
@@ -36,23 +35,13 @@ class InterceptingForwardProxyTest {
                 override fun onRequestHeadersReady(request: HttpRequest) {
                     request.addHeader("added-by-interceptor", "it was")
                 }
-
                 override fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {
+                    assertTrue(false, "Should not be any bytes to proxy")
                 }
             }
 
-            InterceptingForwardProxy.start(port = 0, bindAddress = InetAddress.getLocalHost(), listener).use { proxy ->
-
-                val trustManager = InterceptingForwardProxy.createTrustManager()
-                val sslContext = SSLContext.getInstance("TLS")
-                sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
-
-                val client = OkHttpClient.Builder()
-                    .sslSocketFactory(sslContext.socketFactory, trustManager)
-                    .hostnameVerifier { _, _ -> true }
-                    .proxy(Proxy(Proxy.Type.HTTP, proxy.address()))
-                    .build()
-
+            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+                val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     client.call(target.uri().resolve("/hey").toRequest()).use { resp ->
                         assertThat(resp.code, equalTo(200))
@@ -62,9 +51,48 @@ class InterceptingForwardProxyTest {
             }
         } finally {
             target.stop()
-
         }
     }
+
+    @Test
+    fun `it can proxy fixed size request bodies`() {
+
+        val target = anHttpsServer()
+            .addHandler(Method.POST, "/hey") { req, resp, _ ->
+                resp.write("A target says what? ${req.readBodyAsString()}")
+            }
+            .start()
+
+        try {
+            val listener = object : RequestStreamListener {}
+            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+                val client = okHttpClient(proxy)
+                for (i in 1..2) {
+                    val body = "0123456789".repeat(10000 * i)
+                    client.call(target.uri().resolve("/hey").toRequest()
+                        .post(body.toRequestBody("text/plain;charset=utf-8".toMediaType()))
+                    ).use { resp ->
+                        assertThat(resp.code, equalTo(200))
+                        assertThat(resp.body?.string(), equalTo("A target says what? $body"))
+                    }
+                }
+            }
+        } finally {
+            target.stop()
+        }
+    }
+
+    private fun okHttpClient(proxy: InterceptingForwardProxy): OkHttpClient {
+        val trustManager = InterceptingForwardProxy.createTrustManager()
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
+        return OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustManager)
+            .hostnameVerifier { _, _ -> true }
+            .proxy(Proxy(Proxy.Type.HTTP, proxy.address()))
+            .build()
+    }
+
 
     private fun anHttpsServer(): MuServerBuilder = httpsServer()
         .withHttpsConfig(

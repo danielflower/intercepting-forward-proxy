@@ -27,7 +27,7 @@ class InterceptingForwardProxy(
 
     companion object {
         private val log = LoggerFactory.getLogger(InterceptingForwardProxy::class.java)!!
-        fun start(port: Int, bindAddress: InetAddress, listener: RequestStreamListener, backlog: Int = 50,
+        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLocalHost(), listener: RequestStreamListener, backlog: Int = 50,
                   executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true): InterceptingForwardProxy {
             val socketServer = ServerSocket(port, backlog, bindAddress)
 
