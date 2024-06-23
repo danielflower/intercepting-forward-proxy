@@ -1,5 +1,7 @@
 package com.danielflower
 
+import java.lang.IllegalStateException
+import java.nio.charset.StandardCharsets
 import java.text.ParseException
 
 internal const val SP = 32.toByte()
@@ -43,7 +45,7 @@ class Http1RequestParser {
                 ParseState.METHOD -> {
                     if (b.isUpperCase()) {
                         buffer.appendChar(b)
-                    } else if (b.isSpace()) {
+                    } else if (b == SP) {
                         request.method = buffer.consume()
                         state = ParseState.REQUEST_TARGET
                     } else throw ParseException("state=$state b=$b", i)
@@ -51,7 +53,7 @@ class Http1RequestParser {
                 ParseState.REQUEST_TARGET -> {
                     if (b.isVChar()) { // todo: only allow valid target chars
                         buffer.appendChar(b)
-                    } else if (b.isSpace()) {
+                    } else if (b == SP) {
                         request.url = buffer.consume()
                         state = ParseState.HTTP_VERSION
                     } else throw ParseException("state=$state b=$b", i)
@@ -180,6 +182,7 @@ class Http1RequestParser {
                             i--
                             ParseState.LAST_CHUNK
                         } else if (remainingBytesToProxy == 0L) {
+                            i--
                             ParseState.CHUNK_START
                         } else {
                             ParseState.CHUNK_DATA
@@ -200,7 +203,8 @@ class Http1RequestParser {
                     if (b.isCR()) {
                         state = ParseState.CHUNKED_BODY_ENDING
                     } else if (b.isTChar()) {
-                        TODO("Support trailers")
+                        buffer.appendChar(b)
+                        state = ParseState.TRAILERS
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.CHUNKED_BODY_ENDING -> {
@@ -208,6 +212,21 @@ class Http1RequestParser {
                     if (b.isLF()) {
                         listener.onBytesToProxy(CRLF, 0, 2)
                         onRequestEnded()
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.TRAILERS -> {
+                    if (b.isOWS() || b.isVChar() || b.isCR()) {
+                        buffer.appendChar(b)
+                    } else if (b.isLF()) {
+                        buffer.appendChar(b)
+                        val trailerPart = buffer.toString()
+                        if (trailerPart.endsWith("\r\n\r\n")) {
+                            println("trailers are ---$trailerPart---")
+                            buffer.setLength(0)
+                            val trailerBytes = trailerPart.toByteArray(StandardCharsets.US_ASCII)
+                            listener.onBytesToProxy(trailerBytes, 0, trailerBytes.size)
+                            onRequestEnded()
+                        }
                     } else throw ParseException("state=$state b=$b", i)
                 }
             }
@@ -259,11 +278,12 @@ class Http1RequestParser {
         CHUNK_DATA,
         LAST_CHUNK,
         CHUNKED_BODY_ENDING,
+        TRAILERS,
     }
 
     companion object {
         private fun Byte.isVChar() = this >= 0x21.toByte() && this <= 0x7E.toByte()
-        internal fun Byte.isTChar() : Boolean {
+        internal fun Byte.isTChar(): Boolean {
             // tchar = '!' / '#' / '$' / '%' / '&' / ''' / '*' / '+' / '-' / '.' /
             //    '^' / '_' / '`' / '|' / '~' / DIGIT / ALPHA
             return this == 33.toByte()
@@ -274,17 +294,18 @@ class Http1RequestParser {
                     || (this in 94.toByte()..122.toByte()) // ^, ), `, a-z
                     || this == 124.toByte() || this == 126.toByte()
         }
+
         private fun Byte.isUpperCase() = this in A..Z
-        private fun Byte.isSpace() = this == SP
         private fun Byte.isCR() = this == CR
         private fun Byte.isLF() = this == LF
-        private fun Byte.isHtab() = this == HTAB
-        private fun Byte.isOWS() = this.isSpace() || this.isHtab()
-        private fun Byte.toLower() : Byte = if (this < A || this > Z) this else (this + 32).toByte()
+        private fun Byte.isOWS() = this == SP || this == HTAB
+        private fun Byte.toLower(): Byte = if (this < A || this > Z) this else (this + 32).toByte()
         private fun Byte.isHexDigit() = this in A..F || this in ZERO..NINE || this in A_LOWER..F_LOWER
         private fun StringBuilder.appendChar(b: Byte) {
             this.append(b.toInt().toChar())
+            if (this.length > 16384) throw IllegalStateException("Buffer is ${this.length} bytes")
         }
+
         private fun StringBuilder.consume(): String {
             val v = this.toString()
             this.setLength(0)

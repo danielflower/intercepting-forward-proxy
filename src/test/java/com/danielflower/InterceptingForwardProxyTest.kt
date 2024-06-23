@@ -1,11 +1,9 @@
 package com.danielflower
 
-import io.muserver.ContentTypes
 import io.muserver.HttpsConfigBuilder
 import io.muserver.Method
 import io.muserver.MuServerBuilder
 import io.muserver.MuServerBuilder.httpsServer
-import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -13,13 +11,16 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.hamcrest.MatcherAssert.assertThat
-import org.hamcrest.Matchers.equalTo
+import org.hamcrest.Matchers.*
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.net.Proxy
-import java.net.URI
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ArgumentsSource
+import org.junit.jupiter.params.provider.ValueSource
+import java.net.*
 import java.nio.charset.StandardCharsets
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
 
 
@@ -125,6 +126,119 @@ class InterceptingForwardProxyTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = [ true, false ])
+    fun `it can proxy chunked request bodies with trailers`(oneCharAtATime: Boolean) {
+
+        val target = anHttpsServer()
+            .addHandler(Method.POST, "/hey") { req, resp, _ ->
+                resp.write("A target says what? ${req.readBodyAsString()}\n")
+            }
+            .start()
+
+        try {
+            val listener = object : RequestStreamListener {}
+            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+
+                val trustManager = InterceptingForwardProxy.createTrustManager()
+                val sslContext = SSLContext.getInstance("TLS")
+                sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
+                val plainTextSocket = Socket(proxy.address().address, proxy.address().port)
+                plainTextSocket.inputStream.use { plaintextInputStream ->
+                    plainTextSocket.outputStream.use { plainTextOutputStream ->
+
+                        (sslContext.socketFactory.createSocket(
+                            plainTextSocket,
+                            plaintextInputStream,
+                            false
+                        ) as SSLSocket).use { clientSocket ->
+                            clientSocket.useClientMode = true
+
+                            plainTextOutputStream.write("CONNECT localhost:${target.uri().port} HTTP/1.1\r\n".ascii())
+                            plainTextOutputStream.flush()
+
+                            val expectedConnectResp = "HTTP/1.1 200 Connection Established\r\n\r\n"
+                            val connectResp = String(plaintextInputStream.readNBytes(expectedConnectResp.length), StandardCharsets.US_ASCII)
+                            assertThat(connectResp, equalTo(expectedConnectResp))
+
+                            clientSocket.outputStream.use { sslOutputStream ->
+                                clientSocket.inputStream.use { sslInputStream ->
+                                    val chunkedRequest = """
+                                        POST /hey HTTP/1.1
+                                        Host: ${target.uri().authority}
+                                        transfer-encoding: chunked
+                                        Trailer: Expires, X-Signature
+                                        
+                                        4
+                                        Wiki
+                                        5;name="some value"
+                                        pedia
+                                        0
+                                        Expires: "Wed, 21 Oct 2020 07:28:00 GMT"
+                                        X-Signature: abc123
+                                        
+                                        POST /hey HTTP/1.1
+                                        Host: ${target.uri().authority}
+                                        transfer-encoding: chunked
+                                        
+                                        4;charset=utf8
+                                        Wiki
+                                        5
+                                        pedia
+                                        0
+                                        
+                                        
+                                        """.trimIndent().replace("\n", "\r\n")
+
+                                    if (oneCharAtATime) {
+                                        val ascii = chunkedRequest.ascii()
+                                        for (byte in ascii) {
+                                            sslOutputStream.write(byteArrayOf(byte))
+                                            sslOutputStream.flush()
+                                        }
+                                    } else {
+                                        sslOutputStream.write(chunkedRequest.ascii())
+                                        sslOutputStream.flush()
+                                    }
+
+                                    sslInputStream.bufferedReader().use { reader ->
+                                        var line = reader.readLine()
+
+                                        val lines = mutableListOf<String>()
+                                        lines.addLast(line)
+
+                                        while (line != null && lines.size < 12) {
+                                            line = reader.readLine()
+                                            lines.addLast(line)
+                                        }
+                                        assertThat(lines, contains(
+                                            equalTo("HTTP/1.1 200 OK"),
+                                            startsWith("date: "),
+                                            equalTo("content-type: text/plain;charset=utf-8"),
+                                            equalTo("content-length: 30"),
+                                            equalTo(""),
+                                            equalTo("A target says what? Wikipedia"),
+                                            equalTo("HTTP/1.1 200 OK"),
+                                            startsWith("date: "),
+                                            equalTo("content-type: text/plain;charset=utf-8"),
+                                            equalTo("content-length: 30"),
+                                            equalTo(""),
+                                            equalTo("A target says what? Wikipedia"),
+                                        ))
+                                        println("EOF: $lines")
+                                    }
+
+                                }
+                            }
+
+                        }
+                    }
+                }
+            }
+        } finally {
+            target.stop()
+        }
+    }
 
 
     private fun okHttpClient(proxy: InterceptingForwardProxy): OkHttpClient {
@@ -153,3 +267,4 @@ class InterceptingForwardProxyTest {
 
 private fun URI.toRequest() = Request.Builder().url(this.toURL())
 private fun OkHttpClient.call(request: Request.Builder) = this.newCall(request.build()).execute()
+private fun String.ascii() = this.toByteArray(StandardCharsets.US_ASCII)

@@ -3,6 +3,7 @@ package com.danielflower
 import org.slf4j.LoggerFactory
 import java.io.*
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketAddress
@@ -219,6 +220,6 @@ class InterceptingForwardProxy(
         }
     }
 
-    fun address(): SocketAddress = socketServer.localSocketAddress
+    fun address(): InetSocketAddress = socketServer.localSocketAddress as InetSocketAddress
 }
 
