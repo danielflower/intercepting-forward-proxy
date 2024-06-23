@@ -6,6 +6,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketAddress
+import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -173,13 +174,13 @@ class InterceptingForwardProxy(
                 }
 
                 override fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {
-                    log.info("Sending $length bytes to target from offset $offset")
+                    log.info("Sending $length bytes to target from offset $offset: ${String(array, offset, length, StandardCharsets.UTF_8)}")
                     listener.onBytesToProxy(array, offset, length)
                     out.write(array, offset, length)
-                    out.flush()
                 }
 
             })
+            out.flush()
         }
     }
 

@@ -73,7 +73,7 @@ class InterceptingForwardProxyTest {
             InterceptingForwardProxy.start(listener = listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
-                    val body = "0123456789".repeat(10000 * i)
+                    val body = "0123456789-".repeat(10000 * i)
                     client.call(target.uri().resolve("/hey").toRequest()
                         .post(body.toRequestBody("text/plain;charset=utf-8".toMediaType()))
                     ).use { resp ->
@@ -111,6 +111,7 @@ class InterceptingForwardProxyTest {
                                 sink.writeString(body, StandardCharsets.UTF_8)
                                 sink.flush()
                                 sink.writeString(" The final chunk", StandardCharsets.UTF_8)
+                                sink.flush()
                             }
                         })
                     ).use { resp ->

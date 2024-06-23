@@ -7,8 +7,12 @@ internal const val CR = 13.toByte()
 internal const val LF = 10.toByte()
 private const val HTAB = 9.toByte()
 private const val A = 65.toByte()
+private const val A_LOWER = 97.toByte()
+private const val F = 70.toByte()
+private const val F_LOWER = 102.toByte()
 private const val Z = 90.toByte()
 internal const val COLON = 58.toByte()
+private const val SEMICOLON = 59.toByte()
 internal val COLON_SP = byteArrayOf(COLON, SP)
 internal val CRLF = byteArrayOf(CR, LF)
 private const val ZERO = 48.toByte()
@@ -21,9 +25,10 @@ class Http1RequestParser {
     private var buffer = StringBuilder()
     private var request : HttpRequest = HttpRequest.empty()
     private var headerName : String? = null
+    private var copyFrom : Int? = null
 
     fun feed(bytes: ByteArray, offset: Int, length: Int, listener: RequestStreamListener) {
-
+        println("Received $length at offset $offset")
         println(">> ${String(bytes, offset, length)}")
         var i = offset
         while (i < offset + length) {
@@ -113,6 +118,7 @@ class Http1RequestParser {
                         if (contentLength != null && contentLength > 0) {
                             state = ParseState.FIXED_SIZE_BODY
                             this.remainingBytesToProxy = contentLength
+                            println("Setting remainingBytesToProxy=$remainingBytesToProxy")
                         } else if (req.hasChunkedBody()) {
                             state = ParseState.CHUNK_START
                         } else {
@@ -122,20 +128,110 @@ class Http1RequestParser {
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.FIXED_SIZE_BODY -> {
+                    val numberSent = sendBytes(listener, bytes, offset, length, i)
+                    i += numberSent - 1 // subtracting one because there is an i++ below
                     if (remainingBytesToProxy == 0L) {
                         onRequestEnded()
-                    } else {
-                        val numberToSendNow = minOf(remainingBytesToProxy, length.toLong()).toInt()
-                        listener.onBytesToProxy(bytes, offset + i, numberToSendNow)
-                        i += numberToSendNow - 1 // subtracting one because there is an i++ below
                     }
                 }
                 ParseState.CHUNK_START -> {
+                    copyFrom = i
+                    if (b.isHexDigit()) {
+                        state = ParseState.CHUNK_SIZE
+                        buffer.appendChar(b)
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.CHUNK_SIZE -> {
+                    if (b.isHexDigit()) {
+                        buffer.appendChar(b)
+                    } else if (b == SEMICOLON) {
+                        state = ParseState.CHUNK_EXTENSIONS
+                    } else if (b.isCR()) {
+                        state = ParseState.CHUNK_HEADER_ENDING
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.CHUNK_EXTENSIONS -> {
+                    if (b.isVChar() || b.isOWS()) {
+                        // todo: only allow valid extension characters
+                    } else if (b.isCR()) {
+                        state = ParseState.CHUNK_HEADER_ENDING
+                    }
+                }
+                ParseState.CHUNK_HEADER_ENDING -> {
+                    if (b.isLF()) {
+                        val chunkDataSize = buffer.consume().toInt(16)
+                        val consumeTrailingCRLF = chunkDataSize > 0
 
+                        // Well, this is complicated. Basically we have been skipping over the chunk metadata. Now we want
+                        // to send it all, along with as much of the actual chunk as possible, plus the ending CRLF.
+                        // So we rewind the pointer back to the beginning of the chunk metadata, and then just proxy straight
+                        // from there until the end of the chunk.
+                        // Of course, all of these might be going over buffer boundaries. So the furthest back we can go is
+                        // i=0 (if this is the case, then at the end of the parse loop on the previous buffer it would have
+                        // written everything that was remaining already).
+                        val start = copyFrom!!
+                        val chunkHeaderLen = i - start + 1
+                        remainingBytesToProxy = (chunkDataSize + chunkHeaderLen + (if (consumeTrailingCRLF) 2 else 0)).toLong()
+                        i = maxOf(0, i - chunkHeaderLen + 1)
+                        val written = sendBytes(listener, bytes, offset, length, i)
+                        println("Start of chunk. ChunkSize=$chunkDataSize headerLen=$chunkHeaderLen i=$i written=$written newI=${i + written}")
+                        i += written
+                        state = if (remainingBytesToProxy == 0L && chunkDataSize == 0) {
+                            i--
+                            ParseState.LAST_CHUNK
+                        } else if (remainingBytesToProxy == 0L) {
+                            ParseState.CHUNK_START
+                        } else {
+                            ParseState.CHUNK_DATA
+                        }
+                        copyFrom = null
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.CHUNK_DATA -> {
+                    val numberSent = sendBytes(listener, bytes, offset, length, i)
+                    println("Sending chunk data $numberSent")
+                    i += numberSent - 1 // subtracting one because there is an i++ below
+                    if (remainingBytesToProxy == 0L) {
+                        state = ParseState.CHUNK_START
+                    }
+                }
+                ParseState.LAST_CHUNK -> {
+                    println("LastChunk $b")
+                    if (b.isCR()) {
+                        state = ParseState.CHUNKED_BODY_ENDING
+                    } else if (b.isTChar()) {
+                        TODO("Support trailers")
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.CHUNKED_BODY_ENDING -> {
+                    println("ChunkedBodyENding $b")
+                    if (b.isLF()) {
+                        listener.onBytesToProxy(CRLF, 0, 2)
+                        onRequestEnded()
+                    } else throw ParseException("state=$state b=$b", i)
                 }
             }
             i++
         }
+
+        // When reading the chunk metadata, we read in the data before proxying. If we get to the end of the current
+        // buffer, then we just need to send whatever we were up to.
+        val start = copyFrom
+        if (start != null) {
+            assert(state == ParseState.CHUNK_START || state == ParseState.CHUNK_EXTENSIONS || state == ParseState.CHUNK_SIZE || state == ParseState.CHUNK_HEADER_ENDING)
+            val numToCopy = length - start
+            if (numToCopy > 0) {
+                listener.onBytesToProxy(bytes, start, numToCopy)
+            }
+            copyFrom = 0
+        }
+    }
+
+    private fun sendBytes(listener: RequestStreamListener, bytes: ByteArray, offset: Int, length: Int, i: Int): Int {
+        val numberToSendNow = minOf(remainingBytesToProxy, (length - i).toLong()).toInt()
+        listener.onBytesToProxy(bytes, offset + i, numberToSendNow)
+        remainingBytesToProxy -= numberToSendNow
+        return numberToSendNow
     }
 
     private fun onRequestEnded() {
@@ -143,30 +239,30 @@ class Http1RequestParser {
         this.request = HttpRequest.empty()
     }
 
-    private enum class RequestPart {
-        START, REQUEST_LINE, HEADERS, BODY
-    }
-
-    private enum class ParseState(part: RequestPart) {
-        START(RequestPart.START),
-        METHOD(RequestPart.REQUEST_LINE),
-        REQUEST_TARGET(RequestPart.REQUEST_LINE),
-        HTTP_VERSION(RequestPart.REQUEST_LINE),
-        REQUEST_LINE_ENDING(RequestPart.REQUEST_LINE),
-        HEADER_START(RequestPart.HEADERS),
-        HEADER_NAME(RequestPart.HEADERS),
-        HEADER_NAME_ENDED(RequestPart.HEADERS),
-        HEADER_VALUE(RequestPart.HEADERS),
-        HEADER_VALUE_ENDING(RequestPart.HEADERS),
-        HEADERS_ENDING(RequestPart.HEADERS),
-        FIXED_SIZE_BODY(RequestPart.BODY),
-        CHUNK_START(RequestPart.BODY),
+    private enum class ParseState {
+        START,
+        METHOD,
+        REQUEST_TARGET,
+        HTTP_VERSION,
+        REQUEST_LINE_ENDING,
+        HEADER_START,
+        HEADER_NAME,
+        HEADER_NAME_ENDED,
+        HEADER_VALUE,
+        HEADER_VALUE_ENDING,
+        HEADERS_ENDING,
+        FIXED_SIZE_BODY,
+        CHUNK_START,
+        CHUNK_SIZE,
+        CHUNK_EXTENSIONS,
+        CHUNK_HEADER_ENDING,
+        CHUNK_DATA,
+        LAST_CHUNK,
+        CHUNKED_BODY_ENDING,
     }
 
     companion object {
-        private fun Byte.isVChar() : Boolean {
-            return this >= 0x21.toByte() && this <= 0x7E.toByte()
-        }
+        private fun Byte.isVChar() = this >= 0x21.toByte() && this <= 0x7E.toByte()
         internal fun Byte.isTChar() : Boolean {
             // tchar = '!' / '#' / '$' / '%' / '&' / ''' / '*' / '+' / '-' / '.' /
             //    '^' / '_' / '`' / '|' / '~' / DIGIT / ALPHA
@@ -185,6 +281,7 @@ class Http1RequestParser {
         private fun Byte.isHtab() = this == HTAB
         private fun Byte.isOWS() = this.isSpace() || this.isHtab()
         private fun Byte.toLower() : Byte = if (this < A || this > Z) this else (this + 32).toByte()
+        private fun Byte.isHexDigit() = this in A..F || this in ZERO..NINE || this in A_LOWER..F_LOWER
         private fun StringBuilder.appendChar(b: Byte) {
             this.append(b.toInt().toChar())
         }
