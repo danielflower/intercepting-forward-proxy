@@ -19,7 +19,7 @@ internal val CRLF = byteArrayOf(CR, LF)
 private const val ZERO = 48.toByte()
 private const val NINE = 57.toByte()
 
-class Http1RequestParser {
+internal class Http1RequestParser {
 
     private var remainingBytesToProxy: Long = 0L
     private var state : ParseState = ParseState.START
@@ -28,7 +28,7 @@ class Http1RequestParser {
     private var headerName : String? = null
     private var copyFrom : Int? = null
 
-    fun feed(bytes: ByteArray, offset: Int, length: Int, listener: RequestStreamListener) {
+    fun feed(bytes: ByteArray, offset: Int, length: Int, listener: ConnectionInterceptor) {
         var i = offset
         while (i < offset + length) {
             val b = bytes[i]
@@ -237,7 +237,7 @@ class Http1RequestParser {
         }
     }
 
-    private fun sendBytes(listener: RequestStreamListener, bytes: ByteArray, offset: Int, length: Int, i: Int): Int {
+    private fun sendBytes(listener: ConnectionInterceptor, bytes: ByteArray, offset: Int, length: Int, i: Int): Int {
         val numberToSendNow = minOf(remainingBytesToProxy, (length - i).toLong()).toInt()
         listener.onBytesToProxy(bytes, offset + i, numberToSendNow)
         remainingBytesToProxy -= numberToSendNow
@@ -303,10 +303,5 @@ class Http1RequestParser {
             return v
         }
     }
-}
-
-interface RequestStreamListener {
-    fun onRequestHeadersReady(request: HttpRequest) {}
-    fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {}
 }
 

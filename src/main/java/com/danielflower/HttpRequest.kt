@@ -12,7 +12,7 @@ data class HttpRequest(
      */
     private val headers: MutableList<Pair<String, String>> = mutableListOf()
 ) {
-    fun hasChunkedBody() = hasHeaderValue("transfer-encoding", "chunked")
+    internal fun hasChunkedBody() = hasHeaderValue("transfer-encoding", "chunked")
     fun contentLength(): Long? = header("content-length")?.toLongOrNull()
     fun header(name: String): String? = headers.firstOrNull { it.first == name }?.second
     fun hasHeader(name: String) = headers.any { it.first == name }
@@ -22,7 +22,7 @@ data class HttpRequest(
 
     fun hasHeaderValue(name: String, value: String) = header(name) == value
 
-    fun writeTo(out: OutputStream) {
+    internal fun writeTo(out: OutputStream) {
         out.write(method.headerBytes())
         out.write(' '.code)
         out.write(url.headerBytes())
@@ -40,7 +40,7 @@ data class HttpRequest(
 
     companion object {
         private fun String.headerBytes() = this.toByteArray(StandardCharsets.US_ASCII)
-        fun empty() = HttpRequest("", "", "")
+        internal fun empty() = HttpRequest("", "", "")
     }
 
 }

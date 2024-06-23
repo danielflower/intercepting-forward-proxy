@@ -27,6 +27,8 @@ import javax.net.ssl.TrustManager
 
 class InterceptingForwardProxyTest {
 
+    private val trustManager = InterceptingForwardProxy.createTrustManager(classpathPath = "/test-certs/ca.p12", password = "password".toCharArray())
+    private val serverSslContext = InterceptingForwardProxy.createSSLContext(classpathPath = "/test-certs/proxy-server.p12", password = "password".toCharArray(), trustManager = trustManager)
 
     @Test
     fun `it can proxy requests without bodies`() {
@@ -38,7 +40,7 @@ class InterceptingForwardProxyTest {
             .start()
 
         try {
-            val listener = object : RequestStreamListener {
+            val listener = object : ConnectionInterceptor {
                 override fun onRequestHeadersReady(request: HttpRequest) {
                     request.addHeader("added-by-interceptor", "it was")
                 }
@@ -47,7 +49,7 @@ class InterceptingForwardProxyTest {
                 }
             }
 
-            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+            createProxy(listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     client.call(target.uri().resolve("/hey").toRequest()).use { resp ->
@@ -71,8 +73,8 @@ class InterceptingForwardProxyTest {
             .start()
 
         try {
-            val listener = object : RequestStreamListener {}
-            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+            val listener = object : ConnectionInterceptor {}
+            createProxy(listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     val body = "0123456789-".repeat(10000 * i)
@@ -99,8 +101,8 @@ class InterceptingForwardProxyTest {
             .start()
 
         try {
-            val listener = object : RequestStreamListener {}
-            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+            val listener = object : ConnectionInterceptor {}
+            createProxy(listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     val body = "0123456789".repeat(10000 * i)
@@ -138,10 +140,9 @@ class InterceptingForwardProxyTest {
             .start()
 
         try {
-            val listener = object : RequestStreamListener {}
-            InterceptingForwardProxy.start(listener = listener).use { proxy ->
+            val listener = object : ConnectionInterceptor {}
+            createProxy(listener).use { proxy ->
 
-                val trustManager = InterceptingForwardProxy.createTrustManager()
                 val sslContext = SSLContext.getInstance("TLS")
                 sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
                 val plainTextSocket = Socket(proxy.address().address, proxy.address().port)
@@ -240,9 +241,11 @@ class InterceptingForwardProxyTest {
         }
     }
 
+    private fun createProxy(listener: ConnectionInterceptor) =
+        InterceptingForwardProxy.start(connectionInterceptor = listener, sslContext = serverSslContext)
+
 
     private fun okHttpClient(proxy: InterceptingForwardProxy): OkHttpClient {
-        val trustManager = InterceptingForwardProxy.createTrustManager()
         val sslContext = SSLContext.getInstance("TLS")
         sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
         return OkHttpClient.Builder()

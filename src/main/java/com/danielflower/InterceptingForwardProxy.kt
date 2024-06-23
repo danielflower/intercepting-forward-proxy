@@ -1,11 +1,15 @@
 package com.danielflower
 
 import org.slf4j.LoggerFactory
-import java.io.*
+import java.io.BufferedReader
+import java.io.InputStream
+import java.io.InputStreamReader
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -15,58 +19,79 @@ import java.util.regex.Pattern
 import javax.net.ssl.*
 
 
-class InterceptingForwardProxy(
+/**
+ * A forward HTTP proxy that intercepts SSL traffic.
+ */
+class InterceptingForwardProxy private constructor(
     private val socketServer: ServerSocket,
     private val executorService: ExecutorService,
     private val shutdownExecutorOnClose: Boolean,
     private val sslSocketFactory: SSLSocketFactory,
-    private val listener: RequestStreamListener,
+    private val listener: ConnectionInterceptor,
 ) : AutoCloseable {
     private var acceptThread: Thread? = null
     private var isRunning = true
 
     companion object {
         private val log = LoggerFactory.getLogger(InterceptingForwardProxy::class.java)!!
-        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLocalHost(), listener: RequestStreamListener, backlog: Int = 50,
-                  executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true): InterceptingForwardProxy {
+
+        /**
+         * Starts a forward proxy.
+         *
+         * @param port the port to bind to. Default is `0`.
+         * @param backlog requested maximum queue length for connections on the server socket. Default is `50`.
+         * @param bindAddress the address to bind the server to. The default is `localhost`.
+         * @param executorService the executor to use to handle connections on. Note that this is a blocking server and
+         * one thread per connection is used. The default is [Executors.newVirtualThreadPerTaskExecutor]
+         * @param shutdownExecutorOnClose if true, then when [close] is called the executorServer will also be closed.
+         * Default is `true`.
+         * @param sslContext the SSL context to use, which should include a trust store to verify connections to target
+         * servers and a key manager for the TLS server that clients connect to. The default is `SSLContext.getDefault()`.
+         * See [createTrustManager] and [createSSLContext] for a couple of helper methods that allow loading these from
+         * the classpath.
+         * @param connectionInterceptor a listener that allows you to allow or deny connections, inspect requests and
+         * body data, and change request parameters such as headers.
+         */
+        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLocalHost(), connectionInterceptor: ConnectionInterceptor, backlog: Int = 50,
+                  executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true,
+                  sslContext: SSLContext = SSLContext.getDefault()): InterceptingForwardProxy {
             val socketServer = ServerSocket(port, backlog, bindAddress)
-
-            val sslContext = createSSLContext()
-
             val proxy = InterceptingForwardProxy(
                 socketServer, executorService, shutdownExecutorOnClose,
-                sslContext.socketFactory, listener
+                sslContext.socketFactory, connectionInterceptor
             )
             proxy.start()
             return proxy
         }
 
-        fun createSSLContext() : SSLContext {
-            val keyStore = KeyStore.getInstance("PKCS12")
-            InterceptingForwardProxy::class.java.getResourceAsStream("/test-certs/proxy-server.p12").use { keyStoreStream ->
-                keyStore.load(keyStoreStream, "password".toCharArray())
+        /**
+         * Creates an SSL Context by loading a key store from the classpath
+         */
+        fun createSSLContext(type: String = "PKCS12", classpathPath: String, password: CharArray, trustManager: TrustManager) : SSLContext {
+            val keyStore = KeyStore.getInstance(type)
+            InterceptingForwardProxy::class.java.getResourceAsStream(classpathPath).use { keyStoreStream ->
+                keyStore.load(keyStoreStream, password)
             }
             val keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-            keyManagerFactory.init(keyStore, "password".toCharArray())
+            keyManagerFactory.init(keyStore, password)
             val sslContext = SSLContext.getInstance("TLS")
-            sslContext.init(keyManagerFactory.keyManagers, arrayOf<TrustManager>(createTrustManager()), null)
+            sslContext.init(keyManagerFactory.keyManagers, arrayOf(trustManager), null)
             return sslContext
         }
 
-        fun createTrustManager(): X509TrustManager {
-            val certificateAuthorityStore = KeyStore.getInstance("PKCS12")
-            InterceptingForwardProxy::class.java.getResourceAsStream("/test-certs/ca.p12").use { caStream ->
-                certificateAuthorityStore.load(
-                    caStream,
-                    "password".toCharArray()
-                )
+        /**
+         * Creates a trust manager by loading a CA file from the classpath
+         */
+        fun createTrustManager(type: String = "PKCS12", classpathPath: String, password: CharArray): X509TrustManager {
+            val certificateAuthorityStore = KeyStore.getInstance(type)
+            InterceptingForwardProxy::class.java.getResourceAsStream(classpathPath).use { caStream ->
+                certificateAuthorityStore.load(caStream, password)
             }
             val trustManagerFactory = TrustManagerFactory.getInstance("PKIX")
             trustManagerFactory.init(certificateAuthorityStore)
             return trustManagerFactory.trustManagers
                 .filterIsInstance<X509TrustManager>()
                 .firstOrNull() ?: throw RuntimeException("Could not find the certificate authority trust store")
-
         }
 
 
@@ -81,23 +106,25 @@ class InterceptingForwardProxy(
             if (requestLine == null) {
                 clientSocket.close()
             } else {
-                val clientWriter = BufferedWriter(OutputStreamWriter(clientSocket.getOutputStream()))
                 val requestParts = requestLine.split(Pattern.compile(" ")).dropLastWhile { it.isEmpty() }
                 val method = requestParts[0]
                 val url = requestParts[1]
                 val httpVersion = requestParts[2]
-                if (httpVersion != "HTTP/1.1" && httpVersion != "HTTP/1.0") {
+
+                if (!listener.acceptConnection(clientSocket, method, url, httpVersion)) {
+                    clientSocket.close()
+                } else if (httpVersion != "HTTP/1.1" && httpVersion != "HTTP/1.0") {
                     log.info("Unsupported HTTP version: $httpVersion")
-                    clientWriter.append("HTTP/1.1 505 HTTP Version Not Supported\r\n\r\n").close()
+                    clientSocket.getOutputStream().use { it.write("HTTP/1.1 505 HTTP Version Not Supported\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)) }
                     clientSocket.close()
                 } else if (method == "CONNECT") {
                     val hostPort = url.split(":", limit = 2)
                     val host = hostPort[0]
                     val port = hostPort[1].toInt()
-                    handleConnect(host, port, clientSocket, clientWriter)
+                    handleConnect(host, port, clientSocket)
                 } else {
                     log.info("Unsupported method: $method")
-                    clientWriter.append("HTTP/1.1 405 Method Not Supported\r\n\r\n").close()
+                    clientSocket.getOutputStream().use { it.write("HTTP/1.1 405 Method Not Supported\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)) }
                     clientSocket.close()
                 }
 
@@ -112,12 +139,11 @@ class InterceptingForwardProxy(
         targetHost: String,
         targetPort: Int,
         clientSocket: Socket,
-        clientWriter: BufferedWriter
     ) {
         val targetSocket = Socket(targetHost, targetPort)
-        clientWriter.write("HTTP/1.1 200 Connection Established\r\n\r\n")
-        clientWriter.flush()
-
+        val clientOS = clientSocket.getOutputStream()
+        clientOS.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+        clientOS.flush()
 
         val sslClientSocket = sslSocketFactory.createSocket(clientSocket, null, clientSocket.port, true) as SSLSocket
         sslClientSocket.useClientMode = false
@@ -126,7 +152,6 @@ class InterceptingForwardProxy(
         val sslTargetSocket = sslSocketFactory.createSocket(targetSocket, targetHost, targetPort, true) as SSLSocket
         sslTargetSocket.useClientMode = true
         sslTargetSocket.startHandshake()
-
 
         sslClientSocket.inputStream.use { clientIn ->
             sslClientSocket.outputStream.use { clientOut ->
@@ -155,7 +180,7 @@ class InterceptingForwardProxy(
         var bytesRead: Int
         val requestParser = Http1RequestParser()
         while (source.read(buffer).also { bytesRead = it } != -1) {
-            requestParser.feed(buffer, 0, bytesRead, object : RequestStreamListener {
+            requestParser.feed(buffer, 0, bytesRead, object : ConnectionInterceptor {
                 override fun onRequestHeadersReady(request: HttpRequest) {
                     listener.onRequestHeadersReady(request)
                     request.writeTo(out)
