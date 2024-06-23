@@ -20,13 +20,14 @@ class InterceptingForwardProxy(
     private val executorService: ExecutorService,
     private val shutdownExecutorOnClose: Boolean,
     private val sslSocketFactory: SSLSocketFactory,
+    private val listener: RequestStreamListener,
 ) : AutoCloseable {
     private var acceptThread: Thread? = null
     private var isRunning = true
 
     companion object {
         private val log = LoggerFactory.getLogger(InterceptingForwardProxy::class.java)!!
-        fun start(port: Int, bindAddress: InetAddress, backlog: Int = 50,
+        fun start(port: Int, bindAddress: InetAddress, listener: RequestStreamListener, backlog: Int = 50,
                   executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true): InterceptingForwardProxy {
             val socketServer = ServerSocket(port, backlog, bindAddress)
 
@@ -34,7 +35,7 @@ class InterceptingForwardProxy(
 
             val proxy = InterceptingForwardProxy(
                 socketServer, executorService, shutdownExecutorOnClose,
-                sslContext.socketFactory
+                sslContext.socketFactory, listener
             )
             proxy.start()
             return proxy
@@ -139,26 +140,57 @@ class InterceptingForwardProxy(
                 sslTargetSocket.inputStream.use { serverIn ->
                     sslTargetSocket.outputStream.use { serverOut ->
                         log.info("Starting to copy between client ${sslClientSocket} and target ${sslTargetSocket}")
-                        val t1: Future<*> = executorService.submit { transferData(clientIn, serverOut) }
-                        val t2: Future<*> = executorService.submit { transferData(serverIn, clientOut) }
-                        t1.get()
-                        log.info("t1 joined")
-                        t2.get()
-                        log.info("t2 joined")
+                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(clientIn, serverOut) }
+                        val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(serverIn, clientOut) }
+                        try {
+                            t1.get()
+                            log.info("t1 joined")
+                            t2.get()
+                            log.info("t2 joined")
+                        } catch (e: InterruptedException) {
+                            // we done
+                        }
                     }
                 }
             }
         }
+
+        sslTargetSocket.close()
+        sslClientSocket.close()
+
     }
 
-    private fun transferData(source: InputStream, out: OutputStream) {
+    private fun transferDataFromClientToTarget(source: InputStream, out: OutputStream) {
+        val buffer = ByteArray(8192)
+        var bytesRead: Int
+        val requestParser = Http1RequestParser()
+        while (source.read(buffer).also { bytesRead = it } != -1) {
+            requestParser.feed(buffer, 0, bytesRead, object : RequestStreamListener {
+                override fun onRequestHeadersReady(request: HttpRequest) {
+                    log.info("On request ready $request")
+                    listener.onRequestHeadersReady(request)
+                    request.writeTo(out)
+                }
+
+                override fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {
+                    log.info("Sending $length bytes to target from offset $offset")
+                    listener.onBytesToProxy(array, offset, length)
+                    out.write(array, offset, length)
+                    out.flush()
+                }
+
+            })
+        }
+    }
+
+    private fun transferDataFromTargetToClient(source: InputStream, out: OutputStream) {
         val buffer = ByteArray(8192)
         var bytesRead: Int
         while (source.read(buffer).also { bytesRead = it } != -1) {
             out.write(buffer, 0, bytesRead)
-            out.flush()
         }
     }
+
 
     private fun start() {
         val t = Thread {
@@ -188,3 +220,4 @@ class InterceptingForwardProxy(
 
     fun address(): SocketAddress = socketServer.localSocketAddress
 }
+
