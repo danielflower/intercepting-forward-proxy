@@ -15,9 +15,10 @@ import org.hamcrest.Matchers.*
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
-import org.junit.jupiter.params.provider.ArgumentsSource
 import org.junit.jupiter.params.provider.ValueSource
-import java.net.*
+import java.net.Proxy
+import java.net.Socket
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
@@ -225,7 +226,6 @@ class InterceptingForwardProxyTest {
                                             equalTo(""),
                                             equalTo("A target says what? Wikipedia"),
                                         ))
-                                        println("EOF: $lines")
                                     }
 
                                 }

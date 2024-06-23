@@ -1,6 +1,5 @@
 package com.danielflower
 
-import java.lang.IllegalStateException
 import java.nio.charset.StandardCharsets
 import java.text.ParseException
 
@@ -30,8 +29,6 @@ class Http1RequestParser {
     private var copyFrom : Int? = null
 
     fun feed(bytes: ByteArray, offset: Int, length: Int, listener: RequestStreamListener) {
-        println("Received $length at offset $offset")
-        println(">> ${String(bytes, offset, length)}")
         var i = offset
         while (i < offset + length) {
             val b = bytes[i]
@@ -120,7 +117,6 @@ class Http1RequestParser {
                         if (contentLength != null && contentLength > 0) {
                             state = ParseState.FIXED_SIZE_BODY
                             this.remainingBytesToProxy = contentLength
-                            println("Setting remainingBytesToProxy=$remainingBytesToProxy")
                         } else if (req.hasChunkedBody()) {
                             state = ParseState.CHUNK_START
                         } else {
@@ -176,7 +172,6 @@ class Http1RequestParser {
                         remainingBytesToProxy = (chunkDataSize + chunkHeaderLen + (if (consumeTrailingCRLF) 2 else 0)).toLong()
                         i = maxOf(0, i - chunkHeaderLen + 1)
                         val written = sendBytes(listener, bytes, offset, length, i)
-                        println("Start of chunk. ChunkSize=$chunkDataSize headerLen=$chunkHeaderLen i=$i written=$written newI=${i + written}")
                         i += written
                         state = if (remainingBytesToProxy == 0L && chunkDataSize == 0) {
                             i--
@@ -192,14 +187,12 @@ class Http1RequestParser {
                 }
                 ParseState.CHUNK_DATA -> {
                     val numberSent = sendBytes(listener, bytes, offset, length, i)
-                    println("Sending chunk data $numberSent")
                     i += numberSent - 1 // subtracting one because there is an i++ below
                     if (remainingBytesToProxy == 0L) {
                         state = ParseState.CHUNK_START
                     }
                 }
                 ParseState.LAST_CHUNK -> {
-                    println("LastChunk $b")
                     if (b.isCR()) {
                         state = ParseState.CHUNKED_BODY_ENDING
                     } else if (b.isTChar()) {
@@ -208,7 +201,6 @@ class Http1RequestParser {
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.CHUNKED_BODY_ENDING -> {
-                    println("ChunkedBodyENding $b")
                     if (b.isLF()) {
                         listener.onBytesToProxy(CRLF, 0, 2)
                         onRequestEnded()
@@ -221,7 +213,6 @@ class Http1RequestParser {
                         buffer.appendChar(b)
                         val trailerPart = buffer.toString()
                         if (trailerPart.endsWith("\r\n\r\n")) {
-                            println("trailers are ---$trailerPart---")
                             buffer.setLength(0)
                             val trailerBytes = trailerPart.toByteArray(StandardCharsets.US_ASCII)
                             listener.onBytesToProxy(trailerBytes, 0, trailerBytes.size)

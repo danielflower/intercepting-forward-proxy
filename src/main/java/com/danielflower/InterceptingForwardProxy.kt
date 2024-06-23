@@ -6,8 +6,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.net.SocketAddress
-import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -76,21 +74,20 @@ class InterceptingForwardProxy(
 
     private fun handleClientSocket(clientSocket:Socket) = Runnable {
         try {
-            log.info("Handling ${clientSocket.remoteSocketAddress}")
-
             // Read just the first line, which is in plaintext (rest of input is expected to be encrypted)
             val requestLine = BufferedReader(InputStreamReader(clientSocket.getInputStream())).readLine()
+            log.info("Handling ${clientSocket.remoteSocketAddress} with requestLine $requestLine")
 
             if (requestLine == null) {
                 clientSocket.close()
             } else {
-                log.info("Request line is $requestLine")
                 val clientWriter = BufferedWriter(OutputStreamWriter(clientSocket.getOutputStream()))
                 val requestParts = requestLine.split(Pattern.compile(" ")).dropLastWhile { it.isEmpty() }
                 val method = requestParts[0]
                 val url = requestParts[1]
                 val httpVersion = requestParts[2]
-                if (httpVersion != "HTTP/1.1") {
+                if (httpVersion != "HTTP/1.1" && httpVersion != "HTTP/1.0") {
+                    log.info("Unsupported HTTP version: $httpVersion")
                     clientWriter.append("HTTP/1.1 505 HTTP Version Not Supported\r\n\r\n").close()
                     clientSocket.close()
                 } else if (method == "CONNECT") {
@@ -99,6 +96,7 @@ class InterceptingForwardProxy(
                     val port = hostPort[1].toInt()
                     handleConnect(host, port, clientSocket, clientWriter)
                 } else {
+                    log.info("Unsupported method: $method")
                     clientWriter.append("HTTP/1.1 405 Method Not Supported\r\n\r\n").close()
                     clientSocket.close()
                 }
@@ -123,32 +121,22 @@ class InterceptingForwardProxy(
 
         val sslClientSocket = sslSocketFactory.createSocket(clientSocket, null, clientSocket.port, true) as SSLSocket
         sslClientSocket.useClientMode = false
-        sslClientSocket.addHandshakeCompletedListener { listener ->
-            log.info("client handshake done {}", listener)
-        }
         sslClientSocket.startHandshake()
 
         val sslTargetSocket = sslSocketFactory.createSocket(targetSocket, targetHost, targetPort, true) as SSLSocket
         sslTargetSocket.useClientMode = true
-        sslTargetSocket.addHandshakeCompletedListener { listener ->
-            log.info("target handshake done " + listener)
-        }
-
         sslTargetSocket.startHandshake()
 
 
         sslClientSocket.inputStream.use { clientIn ->
             sslClientSocket.outputStream.use { clientOut ->
                 sslTargetSocket.inputStream.use { serverIn ->
-                    sslTargetSocket.outputStream.use { serverOut ->
-                        log.info("Starting to copy between client ${sslClientSocket} and target ${sslTargetSocket}")
+                    sslTargetSocket.outputStream.buffered().use { serverOut ->
                         val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(clientIn, serverOut) }
                         val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(serverIn, clientOut) }
                         try {
                             t1.get()
-                            log.info("t1 joined")
                             t2.get()
-                            log.info("t2 joined")
                         } catch (e: InterruptedException) {
                             // we done
                         }
@@ -169,13 +157,11 @@ class InterceptingForwardProxy(
         while (source.read(buffer).also { bytesRead = it } != -1) {
             requestParser.feed(buffer, 0, bytesRead, object : RequestStreamListener {
                 override fun onRequestHeadersReady(request: HttpRequest) {
-                    log.info("On request ready $request")
                     listener.onRequestHeadersReady(request)
                     request.writeTo(out)
                 }
 
                 override fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {
-                    log.info("Sending $length bytes to target from offset $offset: ${String(array, offset, length, StandardCharsets.UTF_8)}")
                     listener.onBytesToProxy(array, offset, length)
                     out.write(array, offset, length)
                 }
