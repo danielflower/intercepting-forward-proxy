@@ -1,4 +1,4 @@
-package com.danielflower
+package com.danielflower.ifp
 
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets

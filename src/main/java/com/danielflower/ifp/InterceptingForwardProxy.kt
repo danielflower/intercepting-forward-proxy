@@ -1,4 +1,4 @@
-package com.danielflower
+package com.danielflower.ifp
 
 import org.slf4j.LoggerFactory
 import java.io.BufferedReader
@@ -26,7 +26,6 @@ class InterceptingForwardProxy private constructor(
     private val socketServer: ServerSocket,
     private val executorService: ExecutorService,
     private val shutdownExecutorOnClose: Boolean,
-    private val sslSocketFactory: SSLSocketFactory,
     private val listener: ConnectionInterceptor,
 ) : AutoCloseable {
     private var acceptThread: Thread? = null
@@ -45,10 +44,6 @@ class InterceptingForwardProxy private constructor(
          * one thread per connection is used. The default is [Executors.newVirtualThreadPerTaskExecutor]
          * @param shutdownExecutorOnClose if true, then when [close] is called the executorServer will also be closed.
          * Default is `true`.
-         * @param sslContext the SSL context to use, which should include a trust store to verify connections to target
-         * servers and a key manager for the TLS server that clients connect to.
-         * See [createTrustManager] and [createSSLContext] for a couple of helper methods that allow loading these from
-         * the classpath.
          * @param connectionInterceptor a listener that allows you to allow or deny connections, inspect requests and
          * body data, and change request parameters such as headers.
          */
@@ -56,11 +51,11 @@ class InterceptingForwardProxy private constructor(
         @JvmOverloads
         fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLocalHost(), backlog: Int = 50,
                   executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true,
-                  sslContext: SSLContext, connectionInterceptor: ConnectionInterceptor): InterceptingForwardProxy {
+                  connectionInterceptor: ConnectionInterceptor
+        ): InterceptingForwardProxy {
             val socketServer = ServerSocket(port, backlog, bindAddress)
             val proxy = InterceptingForwardProxy(
-                socketServer, executorService, shutdownExecutorOnClose,
-                sslContext.socketFactory, connectionInterceptor
+                socketServer, executorService, shutdownExecutorOnClose, connectionInterceptor
             )
             proxy.start()
             return proxy
@@ -115,7 +110,8 @@ class InterceptingForwardProxy private constructor(
                 val url = requestParts[1]
                 val httpVersion = requestParts[2]
 
-                if (!listener.acceptConnection(clientSocket, method, url, httpVersion)) {
+                val sslContextToUse = listener.acceptConnection(clientSocket, method, url, httpVersion)
+                if (sslContextToUse == null) {
                     clientSocket.close()
                 } else if (httpVersion != "HTTP/1.1" && httpVersion != "HTTP/1.0") {
                     log.info("Unsupported HTTP version: $httpVersion")
@@ -125,7 +121,7 @@ class InterceptingForwardProxy private constructor(
                     val hostPort = url.split(":", limit = 2)
                     val host = hostPort[0]
                     val port = hostPort[1].toInt()
-                    handleConnect(host, port, clientSocket)
+                    handleConnect(sslContextToUse, host, port, clientSocket)
                 } else {
                     log.info("Unsupported method: $method")
                     clientSocket.getOutputStream().use { it.write("HTTP/1.1 405 Method Not Supported\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)) }
@@ -140,6 +136,7 @@ class InterceptingForwardProxy private constructor(
     }
 
     private fun handleConnect(
+        sslContext: SSLContext,
         targetHost: String,
         targetPort: Int,
         clientSocket: Socket,
@@ -149,11 +146,12 @@ class InterceptingForwardProxy private constructor(
         clientOS.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
         clientOS.flush()
 
-        val sslClientSocket = sslSocketFactory.createSocket(clientSocket, null, clientSocket.port, true) as SSLSocket
+        val ssf = sslContext.socketFactory
+        val sslClientSocket = ssf.createSocket(clientSocket, null, clientSocket.port, true) as SSLSocket
         sslClientSocket.useClientMode = false
         sslClientSocket.startHandshake()
 
-        val sslTargetSocket = sslSocketFactory.createSocket(targetSocket, targetHost, targetPort, true) as SSLSocket
+        val sslTargetSocket = ssf.createSocket(targetSocket, targetHost, targetPort, true) as SSLSocket
         sslTargetSocket.useClientMode = true
         sslTargetSocket.startHandshake()
 
@@ -161,7 +159,7 @@ class InterceptingForwardProxy private constructor(
             sslClientSocket.outputStream.use { clientOut ->
                 sslTargetSocket.inputStream.use { serverIn ->
                     sslTargetSocket.outputStream.buffered().use { serverOut ->
-                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(clientIn, serverOut) }
+                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(sslContext, clientIn, serverOut) }
                         val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(serverIn, clientOut) }
                         try {
                             t1.get()
@@ -179,12 +177,16 @@ class InterceptingForwardProxy private constructor(
 
     }
 
-    private fun transferDataFromClientToTarget(source: InputStream, out: OutputStream) {
+    private fun transferDataFromClientToTarget(sslContext: SSLContext, source: InputStream, out: OutputStream) {
         val buffer = ByteArray(8192)
         var bytesRead: Int
         val requestParser = Http1RequestParser()
         while (source.read(buffer).also { bytesRead = it } != -1) {
             requestParser.feed(buffer, 0, bytesRead, object : ConnectionInterceptor {
+                override fun acceptConnection(
+                    clientSocket: Socket, method: String, requestTarget: String, httpVersion: String
+                ) = sslContext
+
                 override fun onRequestHeadersReady(request: HttpRequest) {
                     listener.onRequestHeadersReady(request)
                     request.writeTo(out)

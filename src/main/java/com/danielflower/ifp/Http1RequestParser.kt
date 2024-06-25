@@ -1,4 +1,4 @@
-package com.danielflower
+package com.danielflower.ifp
 
 import java.nio.charset.StandardCharsets
 import java.text.ParseException
