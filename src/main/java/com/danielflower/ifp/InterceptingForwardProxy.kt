@@ -39,7 +39,8 @@ class InterceptingForwardProxy private constructor(
          *
          * @param port the port to bind to. Default is `0`.
          * @param backlog requested maximum queue length for connections on the server socket. Default is `50`.
-         * @param bindAddress the address to bind the server to. The default is `localhost`.
+         * @param bindAddress the address to bind the server to. The default is [InetAddress.getLoopbackAddress] which
+         * only allows connections from localhost.
          * @param executorService the executor to use to handle connections on. Note that this is a blocking server and
          * one thread per connection is used. The default is [Executors.newVirtualThreadPerTaskExecutor]
          * @param shutdownExecutorOnClose if true, then when [close] is called the executorServer will also be closed.
@@ -49,7 +50,7 @@ class InterceptingForwardProxy private constructor(
          */
         @JvmStatic
         @JvmOverloads
-        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLocalHost(), backlog: Int = 50,
+        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLoopbackAddress(), backlog: Int = 50,
                   executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true,
                   connectionInterceptor: ConnectionInterceptor
         ): InterceptingForwardProxy {
