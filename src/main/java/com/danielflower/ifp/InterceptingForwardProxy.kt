@@ -150,10 +150,16 @@ class InterceptingForwardProxy private constructor(
         val ssf = sslContext.socketFactory
         val sslClientSocket = ssf.createSocket(clientSocket, null, clientSocket.port, true) as SSLSocket
         sslClientSocket.useClientMode = false
+        sslClientSocket.addHandshakeCompletedListener { listener ->
+            log.info("Handshake to ${clientSocket.remoteSocketAddress} for $targetHost complete with cipher ${listener.cipherSuite}")
+        }
         sslClientSocket.startHandshake()
 
         val sslTargetSocket = ssf.createSocket(targetSocket, targetHost, targetPort, true) as SSLSocket
         sslTargetSocket.useClientMode = true
+        sslTargetSocket.addHandshakeCompletedListener { listener ->
+            log.info("Handshake to $targetHost complete with cipher ${listener.cipherSuite}")
+        }
         sslTargetSocket.startHandshake()
 
         sslClientSocket.inputStream.use { clientIn ->
