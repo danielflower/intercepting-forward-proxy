@@ -62,7 +62,7 @@ class InterceptingForwardProxyTest {
                 }
             }
 
-            InterceptingForwardProxy.start(connectionInterceptor = listener).use { proxy ->
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     client.call(target.uri().resolve("/hey").toRequest()).use { resp ->
@@ -94,7 +94,7 @@ class InterceptingForwardProxyTest {
                     httpVersion: String
                 ) = serverSslContext
             }
-            InterceptingForwardProxy.start(connectionInterceptor = listener).use { proxy ->
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     val body = "0123456789-".repeat(10000 * i)
@@ -130,7 +130,7 @@ class InterceptingForwardProxyTest {
                     httpVersion: String
                 ) = serverSslContext
             }
-            InterceptingForwardProxy.start(connectionInterceptor = listener).use { proxy ->
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     val body = "0123456789".repeat(10000 * i)
@@ -180,7 +180,7 @@ class InterceptingForwardProxyTest {
                     httpVersion: String
                 ) = serverSslContext
             }
-            InterceptingForwardProxy.start(connectionInterceptor = listener).use { proxy ->
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
 
                 val sslContext = SSLContext.getInstance("TLS")
                 sslContext.init(null, arrayOf<TrustManager>(trustManager), null)

@@ -35,25 +35,19 @@ class InterceptingForwardProxy private constructor(
         private val log = LoggerFactory.getLogger(InterceptingForwardProxy::class.java)!!
 
         /**
-         * Starts a forward proxy.
-         *
-         * @param port the port to bind to. Default is `0`.
-         * @param backlog requested maximum queue length for connections on the server socket. Default is `50`.
-         * @param bindAddress the address to bind the server to. The default is [InetAddress.getLoopbackAddress] which
-         * only allows connections from localhost.
-         * @param executorService the executor to use to handle connections on. Note that this is a blocking server and
-         * one thread per connection is used. The default is [Executors.newVirtualThreadPerTaskExecutor]
-         * @param shutdownExecutorOnClose if true, then when [close] is called the executorServer will also be closed.
-         * Default is `true`.
-         * @param connectionInterceptor a listener that allows you to allow or deny connections, inspect requests and
-         * body data, and change request parameters such as headers.
+         * Starts a forward proxy with the given config.
+         * @param connectionInterceptor A listener that allows you to allow or deny connections, inspect requests and
+         * body data, and change request parameters such as headers. This is required.
          */
         @JvmStatic
-        @JvmOverloads
-        fun start(port: Int = 0, bindAddress: InetAddress = InetAddress.getLoopbackAddress(), backlog: Int = 50,
-                  executorService: ExecutorService = Executors.newVirtualThreadPerTaskExecutor(), shutdownExecutorOnClose: Boolean = true,
-                  connectionInterceptor: ConnectionInterceptor
-        ): InterceptingForwardProxy {
+        fun start(config: InterceptingForwardProxyConfig, connectionInterceptor: ConnectionInterceptor): InterceptingForwardProxy {
+
+            val port = config.port ?: 0
+            val bindAddress = config.bindAddress ?: InetAddress.getLoopbackAddress()
+            val backlog = config.backlog ?: 50
+            val executorService = config.executorService ?: Executors.newVirtualThreadPerTaskExecutor()
+            val shutdownExecutorOnClose = config.shutdownExecutorOnClose ?: true
+
             val socketServer = ServerSocket(port, backlog, bindAddress)
             val proxy = InterceptingForwardProxy(
                 socketServer, executorService, shutdownExecutorOnClose, connectionInterceptor
@@ -247,3 +241,31 @@ class InterceptingForwardProxy private constructor(
     fun address(): InetSocketAddress = socketServer.localSocketAddress as InetSocketAddress
 }
 
+/**
+ * Config for the proxy. The only required value is [connectionInterceptor]
+ */
+class InterceptingForwardProxyConfig {
+
+    /**
+     * The port to bind to. Default is `0`.
+     */
+    var port: Int? = null
+    /**
+     * The address to bind the server to. The default is [InetAddress.getLoopbackAddress] which
+     * only allows connections from localhost.
+     */
+    var bindAddress: InetAddress? = null
+    /**
+     * Requested maximum queue length for connections on the server socket. Default is `50`.
+     */
+    var backlog: Int? = null
+    /**
+     * The executor to use to handle connections on. Note that this is a blocking server and
+     * one thread per connection is used. The default is [Executors.newVirtualThreadPerTaskExecutor]
+     */
+    var executorService: ExecutorService? = null
+    /**
+     * If `true`, then when [InterceptingForwardProxy.close] is called the executorServer will also be closed. Default is `true`.
+     */
+    var shutdownExecutorOnClose: Boolean? = null
+}
