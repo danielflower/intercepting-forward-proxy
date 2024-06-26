@@ -19,6 +19,10 @@ data class HttpRequest(
     fun addHeader(name: String, value: String) {
         headers.addLast(Pair(name, value))
     }
+    fun setHeader(name: String, value: String) {
+        headers.removeAll { it.first == name }
+        addHeader(name, value)
+    }
 
     fun hasHeaderValue(name: String, value: String) = header(name) == value
 

@@ -19,7 +19,7 @@ internal val CRLF = byteArrayOf(CR, LF)
 private const val ZERO = 48.toByte()
 private const val NINE = 57.toByte()
 
-internal class Http1RequestParser {
+internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
 
     private var remainingBytesToProxy: Long = 0L
     private var state : ParseState = ParseState.START
@@ -122,7 +122,7 @@ internal class Http1RequestParser {
                         } else {
                             onRequestEnded()
                         }
-                        listener.onRequestHeadersReady(req)
+                        listener.onRequestHeadersReady(connectionInfo, req)
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.FIXED_SIZE_BODY -> {
@@ -202,7 +202,7 @@ internal class Http1RequestParser {
                 }
                 ParseState.CHUNKED_BODY_ENDING -> {
                     if (b.isLF()) {
-                        listener.onBytesToProxy(CRLF, 0, 2)
+                        listener.onBytesToProxy(connectionInfo, request, CRLF, 0, 2)
                         onRequestEnded()
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -215,7 +215,7 @@ internal class Http1RequestParser {
                         if (trailerPart.endsWith("\r\n\r\n")) {
                             buffer.setLength(0)
                             val trailerBytes = trailerPart.toByteArray(StandardCharsets.US_ASCII)
-                            listener.onBytesToProxy(trailerBytes, 0, trailerBytes.size)
+                            listener.onBytesToProxy(connectionInfo, request, trailerBytes, 0, trailerBytes.size)
                             onRequestEnded()
                         }
                     } else throw ParseException("state=$state b=$b", i)
@@ -231,7 +231,7 @@ internal class Http1RequestParser {
             assert(state == ParseState.CHUNK_START || state == ParseState.CHUNK_EXTENSIONS || state == ParseState.CHUNK_SIZE || state == ParseState.CHUNK_HEADER_ENDING)
             val numToCopy = length - start
             if (numToCopy > 0) {
-                listener.onBytesToProxy(bytes, start, numToCopy)
+                listener.onBytesToProxy(connectionInfo, request, bytes, start, numToCopy)
             }
             copyFrom = 0
         }
@@ -239,7 +239,7 @@ internal class Http1RequestParser {
 
     private fun sendBytes(listener: ConnectionInterceptor, bytes: ByteArray, offset: Int, length: Int, i: Int): Int {
         val numberToSendNow = minOf(remainingBytesToProxy, (length - i).toLong()).toInt()
-        listener.onBytesToProxy(bytes, offset + i, numberToSendNow)
+        listener.onBytesToProxy(connectionInfo, request, bytes, offset + i, numberToSendNow)
         remainingBytesToProxy -= numberToSendNow
         return numberToSendNow
     }

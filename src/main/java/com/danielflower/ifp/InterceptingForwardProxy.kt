@@ -15,7 +15,6 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
-import java.util.regex.Pattern
 import javax.net.ssl.*
 
 
@@ -100,7 +99,7 @@ class InterceptingForwardProxy private constructor(
             if (requestLine == null) {
                 clientSocket.close()
             } else {
-                val requestParts = requestLine.split(Pattern.compile(" ")).dropLastWhile { it.isEmpty() }
+                val requestParts = requestLine.split(' ').dropLastWhile { it.isEmpty() }
                 val method = requestParts[0]
                 val url = requestParts[1]
                 val httpVersion = requestParts[2]
@@ -156,12 +155,14 @@ class InterceptingForwardProxy private constructor(
         }
         sslTargetSocket.startHandshake()
 
+        val context = ConnectionInfo(targetHost, targetPort)
+
         sslClientSocket.inputStream.use { clientIn ->
             sslClientSocket.outputStream.use { clientOut ->
                 sslTargetSocket.inputStream.use { serverIn ->
                     sslTargetSocket.outputStream.buffered().use { serverOut ->
-                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(sslContext, clientIn, serverOut) }
-                        val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(serverIn, clientOut) }
+                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(context, sslContext, clientIn, serverOut) }
+                        val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(context, serverIn, clientOut) }
                         try {
                             t1.get()
                             t2.get()
@@ -178,23 +179,28 @@ class InterceptingForwardProxy private constructor(
 
     }
 
-    private fun transferDataFromClientToTarget(sslContext: SSLContext, source: InputStream, out: OutputStream) {
+    private fun transferDataFromClientToTarget(
+        context: ConnectionInfo,
+        sslContext: SSLContext,
+        source: InputStream,
+        out: OutputStream
+    ) {
         val buffer = ByteArray(8192)
         var bytesRead: Int
-        val requestParser = Http1RequestParser()
+        val requestParser = Http1RequestParser(context)
         while (source.read(buffer).also { bytesRead = it } != -1) {
             requestParser.feed(buffer, 0, bytesRead, object : ConnectionInterceptor {
                 override fun acceptConnection(
                     clientSocket: Socket, method: String, requestTarget: String, httpVersion: String
                 ) = sslContext
 
-                override fun onRequestHeadersReady(request: HttpRequest) {
-                    listener.onRequestHeadersReady(request)
+                override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
+                    listener.onRequestHeadersReady(connection, request)
                     request.writeTo(out)
                 }
 
-                override fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {
-                    listener.onBytesToProxy(array, offset, length)
+                override fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                    listener.onBytesToProxy(connection, request, array, offset, length)
                     out.write(array, offset, length)
                 }
 
@@ -203,7 +209,7 @@ class InterceptingForwardProxy private constructor(
         }
     }
 
-    private fun transferDataFromTargetToClient(source: InputStream, out: OutputStream) {
+    private fun transferDataFromTargetToClient(context: ConnectionInfo, source: InputStream, out: OutputStream) {
         val buffer = ByteArray(8192)
         var bytesRead: Int
         while (source.read(buffer).also { bytesRead = it } != -1) {
@@ -269,3 +275,9 @@ class InterceptingForwardProxyConfig {
      */
     var shutdownExecutorOnClose: Boolean? = null
 }
+
+@JvmRecord
+data class ConnectionInfo(
+    val targetHost: String,
+    val targetPort: Int,
+)

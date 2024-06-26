@@ -41,14 +41,14 @@ interface ConnectionInterceptor {
      * Note that for a request with a body, such as a POST with data, this is sent before the request body
      * is read.
      */
-    fun onRequestHeadersReady(request: HttpRequest) {}
+    fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {}
 
     /**
      * Called before request body bytes are being sent to the target server.
      *
      * Note this is raw data, e.g. it may contain HTTP chunked encoding markers, and trailers.
      */
-    fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {}
+    fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
 
 
 }

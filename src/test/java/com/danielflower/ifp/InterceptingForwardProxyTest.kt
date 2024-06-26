@@ -53,11 +53,11 @@ class InterceptingForwardProxyTest {
                     httpVersion: String
                 ) = serverSslContext
 
-                override fun onRequestHeadersReady(request: HttpRequest) {
+                override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     request.addHeader("added-by-interceptor", "it was")
                 }
 
-                override fun onBytesToProxy(array: ByteArray, offset: Int, length: Int) {
+                override fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     Assertions.assertTrue(false, "Should not be any bytes to proxy")
                 }
             }

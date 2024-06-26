@@ -21,9 +21,7 @@ Add the dependency:
 And then start a server:
 
 ```java
-import com.danielflower.ifp.ConnectionInterceptor;
-import com.danielflower.ifp.HttpRequest;
-import com.danielflower.ifp.InterceptingForwardProxy;
+import com.danielflower.ifp.*;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -36,14 +34,16 @@ public class MyForwardProxy {
 
   public static void main(String[] args) {
 
-    var proxy = InterceptingForwardProxy.start(2048, new ConnectionInterceptor() {
+    var config = new InterceptingForwardProxyConfig();
+    config.setPort(2048);
+    var proxy = InterceptingForwardProxy.start(config, new ConnectionInterceptor() {
       @Override
-      public void onRequestHeadersReady(HttpRequest request) {
-        System.out.println("Proxying request " + request);
+      public void onRequestHeadersReady(ConnectionInfo connection, HttpRequest request) {
+        System.out.println("Proxying connection " + connection + " for request " + request);
       }
 
       @Override
-      public void onBytesToProxy(byte[] array, int offset, int length) {
+      public void onBytesToProxy(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
         System.out.println("Sending " + length + " request body bytes");
       }
 
