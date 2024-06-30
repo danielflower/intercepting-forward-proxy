@@ -248,7 +248,7 @@ class InterceptingForwardProxy private constructor(
 }
 
 /**
- * Config for the proxy. The only required value is [connectionInterceptor]
+ * Config for the proxy
  */
 class InterceptingForwardProxyConfig {
 
