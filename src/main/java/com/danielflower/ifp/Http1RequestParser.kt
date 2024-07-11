@@ -220,6 +220,11 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                         }
                     } else throw ParseException("state=$state b=$b", i)
                 }
+                ParseState.WEBSOCKET -> {
+                    val remaining = length - i
+                    listener.onBytesToProxy(connectionInfo, request, bytes, i, remaining)
+                    i += remaining - 1 // -1 because there is a i++ below
+                }
             }
             i++
         }
@@ -245,7 +250,11 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
     }
 
     private fun onRequestEnded() {
-        this.state = ParseState.START
+        if (this.request.isWebsocketUpgrade()) {
+            this.state = ParseState.WEBSOCKET
+        } else {
+            this.state = ParseState.START
+        }
         this.request = HttpRequest.empty()
     }
 
@@ -270,6 +279,7 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
         LAST_CHUNK,
         CHUNKED_BODY_ENDING,
         TRAILERS,
+        WEBSOCKET,
     }
 
     companion object {

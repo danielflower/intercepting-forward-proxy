@@ -23,6 +23,8 @@ data class HttpRequest(
         headers.removeAll { it.first == name }
         addHeader(name, value)
     }
+    fun headers() : List<Pair<String, String>> = headers
+    fun isWebsocketUpgrade() = hasHeaderValue("upgrade", "websocket")
 
     fun hasHeaderValue(name: String, value: String) = header(name) == value
 

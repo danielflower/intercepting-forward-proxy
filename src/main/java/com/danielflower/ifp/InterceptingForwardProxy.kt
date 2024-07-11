@@ -163,8 +163,12 @@ class InterceptingForwardProxy private constructor(
                         try {
                             t1.get()
                             t2.get()
-                        } catch (e: InterruptedException) {
-                            // we done
+                        } catch (e: Exception) {
+                            if (e is InterruptedException || e is InterruptedIOException || Thread.currentThread().isInterrupted) {
+                                // it's finished
+                            } else {
+                                throw e
+                            }
                         }
                     }
                 }

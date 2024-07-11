@@ -1,16 +1,17 @@
 package com.danielflower.ifp
 
-import io.muserver.HttpsConfigBuilder
-import io.muserver.Method
-import io.muserver.MuServerBuilder
+import io.muserver.*
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
+import okio.ByteString.Companion.encodeUtf8
+import okio.ByteString.Companion.toByteString
 import org.hamcrest.MatcherAssert
+import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers
+import org.hamcrest.Matchers.equalTo
+import org.hamcrest.Matchers.greaterThanOrEqualTo
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
@@ -18,7 +19,11 @@ import org.junit.jupiter.params.provider.ValueSource
 import java.net.Proxy
 import java.net.Socket
 import java.net.URI
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
@@ -284,6 +289,84 @@ class InterceptingForwardProxyTest {
             target.stop()
         }
     }
+
+
+    @Test
+    fun `it can proxy web sockets`() {
+
+        val actual = StringBuffer()
+        val onSendBytesCount = AtomicInteger(0)
+        val messagesReceivedLatch = CountDownLatch(3)
+
+        val target = anHttpsServer()
+            .addHandler(WebSocketHandlerBuilder.webSocketHandler()
+                .withPath("/somepath/")
+                .withWebSocketFactory { _, _ ->
+                    object : BaseWebSocket() {
+                        override fun onText(message: String, isLast: Boolean, onComplete: DoneCallback?) {
+                            session().sendText(message.uppercase(), onComplete)
+                        }
+
+                        override fun onBinary(buffer: ByteBuffer, isLast: Boolean, onComplete: DoneCallback?) {
+                            val text = buffer.toByteString().string(StandardCharsets.UTF_8)
+                            session().sendText(text, onComplete)
+                        }
+                    }
+                }
+            )
+            .start()
+
+        val bigText = "一. yī. one · 二. èr. two · 三. sān. three · 四. sì. four · 五. wǔ. five · 六. liù. six"
+            .repeat(200)
+
+        try {
+            val listener = object : ConnectionInterceptor {
+                override fun acceptConnection(
+                    clientSocket: Socket,
+                    method: String,
+                    requestTarget: String,
+                    httpVersion: String
+                ) = serverSslContext
+
+                override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
+                    actual.append("websocket? ${request.isWebsocketUpgrade()}\n")
+                }
+
+                override fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                    onSendBytesCount.incrementAndGet()
+                }
+            }
+
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
+                val client = okHttpClient(proxy)
+                val wssUrl = target.uri().toString().replaceFirst("http", "ws") + "/somepath/"
+                val req = Request.Builder().url(wssUrl).build()
+                val newWebSocket = client.newWebSocket(req, object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        actual.append("Got back $text\n")
+                        messagesReceivedLatch.countDown()
+                    }
+                })
+                newWebSocket.send("Well hello there, ")
+                newWebSocket.send("world")
+                newWebSocket.send(bigText.encodeUtf8())
+                messagesReceivedLatch.await(20, TimeUnit.SECONDS)
+                newWebSocket.close(1000, "Finished")
+            }
+        } finally {
+            target.stop()
+        }
+        assertThat(actual.toString(), equalTo("""
+            websocket? true
+            Got back WELL HELLO THERE, 
+            Got back WORLD
+            Got back $bigText
+            
+        """.trimIndent()))
+        assertThat(onSendBytesCount.get(), greaterThanOrEqualTo(3))
+    }
+
+
 
 
     private fun okHttpClient(proxy: InterceptingForwardProxy): OkHttpClient {
