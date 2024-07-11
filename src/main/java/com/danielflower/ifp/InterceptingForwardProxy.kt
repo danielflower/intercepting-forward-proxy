@@ -1,10 +1,7 @@
 package com.danielflower.ifp
 
 import org.slf4j.LoggerFactory
-import java.io.BufferedReader
-import java.io.InputStream
-import java.io.InputStreamReader
-import java.io.OutputStream
+import java.io.*
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -207,6 +204,8 @@ class InterceptingForwardProxy private constructor(
             })
             out.flush()
         }
+        source.closeQuietly()
+        out.closeQuietly()
     }
 
     private fun transferDataFromTargetToClient(context: ConnectionInfo, source: InputStream, out: OutputStream) {
@@ -215,6 +214,8 @@ class InterceptingForwardProxy private constructor(
         while (source.read(buffer).also { bytesRead = it } != -1) {
             out.write(buffer, 0, bytesRead)
         }
+        source.closeQuietly()
+        out.closeQuietly()
     }
 
 
@@ -245,6 +246,13 @@ class InterceptingForwardProxy private constructor(
     }
 
     fun address(): InetSocketAddress = socketServer.localSocketAddress as InetSocketAddress
+}
+
+private fun Closeable.closeQuietly() {
+    try {
+        this.close()
+    } catch (_: IOException) {
+    }
 }
 
 /**
