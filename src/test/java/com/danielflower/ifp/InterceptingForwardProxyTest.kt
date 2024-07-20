@@ -9,16 +9,14 @@ import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers
-import org.hamcrest.Matchers.equalTo
-import org.hamcrest.Matchers.greaterThanOrEqualTo
+import org.hamcrest.Matchers.*
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
-import java.net.InetSocketAddress
-import java.net.Proxy
-import java.net.Socket
-import java.net.URI
+import java.net.*
+import java.net.http.HttpClient
+import java.net.http.HttpResponse
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
@@ -396,6 +394,59 @@ class InterceptingForwardProxyTest {
         assertThat(onSendBytesCount.get(), greaterThanOrEqualTo(3))
     }
 
+    @Test
+    fun `the onEnded callback happens at the end`() {
+
+        val target = anHttpsServer()
+            .addHandler(Method.GET, "/hey") { req, resp, _ ->
+                resp.write("A target says what?")
+            }
+            .start()
+
+        val onEndCalled = CountDownLatch(1)
+        var onEndClientToTargetException : Exception? = null
+        var onEndTargetToClientException : Exception? = null
+
+        try {
+            val listener = object : ConnectionInterceptor {
+                override fun acceptConnection(
+                    clientSocket: Socket,
+                    method: String,
+                    requestTarget: String,
+                    httpVersion: String
+                ) = ConnectionInfoImpl(ConnectionInfo.fromTarget(requestTarget), serverSslContext)
+
+                override fun onConnectionEnded(
+                    connection: ConnectionInfo,
+                    clientToTargetException: Exception?,
+                    targetToClientException: Exception?
+                ) {
+                    onEndClientToTargetException = clientToTargetException
+                    onEndTargetToClientException = targetToClientException
+                    onEndCalled.countDown()
+                }
+            }
+
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
+                javaNetHttpClient(proxy).use { client ->
+                    for (i in 1..2) {
+                        val resp = client.send(java.net.http.HttpRequest.newBuilder(target.uri().resolve("/hey")).build(), HttpResponse.BodyHandlers.ofString())
+                        assertThat(resp.statusCode(), equalTo(200))
+                        assertThat(resp.body(), equalTo("A target says what?"))
+                    }
+                }
+            }
+        } finally {
+            target.stop()
+        }
+
+        assertThat(onEndCalled.await(10, TimeUnit.SECONDS), equalTo(true))
+        assertThat(onEndClientToTargetException, nullValue())
+        assertThat(onEndTargetToClientException, nullValue())
+
+    }
+
+
 
 
 
@@ -417,6 +468,16 @@ class InterceptingForwardProxyTest {
                 .sslSocketFactory(sslContext.socketFactory, trustManager)
                 .hostnameVerifier { _, _ -> true }
                 .proxy(Proxy(Proxy.Type.HTTP, proxy.address()))
+                .build()
+        }
+
+        fun javaNetHttpClient(proxy: InterceptingForwardProxy): HttpClient {
+            System.setProperty("jdk.internal.httpclient.disableHostnameVerification", "true")
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
+            return HttpClient.newBuilder()
+                .sslContext(sslContext)
+                .proxy(ProxySelector.of(proxy.address()))
                 .build()
         }
 

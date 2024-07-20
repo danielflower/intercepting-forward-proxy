@@ -49,5 +49,20 @@ interface ConnectionInterceptor {
      */
     fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
 
+    /**
+     * Called when the connection ends.
+     *
+     * @param connection The connection that is ended
+     * @param clientToTargetException `null` if the connection was shut down gracefully, otherwise an exception from piping
+     * bytes from the client to the target
+     * @param targetToClientException `null` if the connection was shut down gracefully, otherwise an exception from piping
+     * bytes from the target to the client
+     */
+    fun onConnectionEnded(
+        connection: ConnectionInfo,
+        clientToTargetException: Exception?,
+        targetToClientException: Exception?
+    ) {}
+
 }
 
