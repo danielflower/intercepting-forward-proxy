@@ -1,7 +1,6 @@
 package com.danielflower.ifp
 
 import java.net.Socket
-import javax.net.ssl.SSLContext
 
 /**
  * Listeners to allow introspection and interception of requests.
@@ -28,9 +27,9 @@ interface ConnectionInterceptor {
      * @param method the method used, which is always CONNECT
      * @param requestTarget the target server, which is generally of the format `host:port`
      * @param httpVersion the HTTP version used which is either `HTTP/1.1` or `HTTP/1.0`
-     * @return The SSL Connection to use if the connection should be accepted; otherwise `null` to reject the connection.
+     * @return Connection info to use if the connection should be accepted; otherwise `null` to reject the connection.
      */
-    fun acceptConnection(clientSocket: Socket, method: String, requestTarget: String, httpVersion: String): SSLContext?
+    fun acceptConnection(clientSocket: Socket, method: String, requestTarget: String, httpVersion: String): ConnectionInfo?
 
     /**
      * Called when a request line and headers have been read, before it is forwarded to the target server.
@@ -50,5 +49,5 @@ interface ConnectionInterceptor {
      */
     fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
 
-
 }
+

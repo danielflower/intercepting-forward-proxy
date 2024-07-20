@@ -101,18 +101,15 @@ class InterceptingForwardProxy private constructor(
                 val url = requestParts[1]
                 val httpVersion = requestParts[2]
 
-                val sslContextToUse = listener.acceptConnection(clientSocket, method, url, httpVersion)
-                if (sslContextToUse == null) {
+                val connectionInfo = listener.acceptConnection(clientSocket, method, url, httpVersion)
+                if (connectionInfo == null) {
                     clientSocket.close()
                 } else if (httpVersion != "HTTP/1.1" && httpVersion != "HTTP/1.0") {
                     log.info("Unsupported HTTP version: $httpVersion")
                     clientSocket.getOutputStream().use { it.write("HTTP/1.1 505 HTTP Version Not Supported\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)) }
                     clientSocket.close()
                 } else if (method == "CONNECT") {
-                    val hostPort = url.split(":", limit = 2)
-                    val host = hostPort[0]
-                    val port = hostPort[1].toInt()
-                    handleConnect(sslContextToUse, host, port, clientSocket)
+                    handleConnect(connectionInfo, clientSocket)
                 } else {
                     log.info("Unsupported method: $method")
                     clientSocket.getOutputStream().use { it.write("HTTP/1.1 405 Method Not Supported\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)) }
@@ -126,40 +123,34 @@ class InterceptingForwardProxy private constructor(
 
     }
 
+    private val connectionEstablishedResponseBytes = "HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)
     private fun handleConnect(
-        sslContext: SSLContext,
-        targetHost: String,
-        targetPort: Int,
+        connectionInfo: ConnectionInfo,
         clientSocket: Socket,
     ) {
-        val targetSocket = Socket(targetHost, targetPort)
+        val dest = connectionInfo.targetAddress()
+        val targetSocket = Socket(dest.address, dest.port)
         val clientOS = clientSocket.getOutputStream()
-        clientOS.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+        clientOS.write(connectionEstablishedResponseBytes)
         clientOS.flush()
 
-        val ssf = sslContext.socketFactory
+        val ssf = connectionInfo.sslContext().socketFactory
         val sslClientSocket = ssf.createSocket(clientSocket, null, clientSocket.port, true) as SSLSocket
         sslClientSocket.useClientMode = false
-        sslClientSocket.addHandshakeCompletedListener { listener ->
-            log.info("Handshake to ${clientSocket.remoteSocketAddress} for $targetHost complete with cipher ${listener.cipherSuite}")
-        }
+        sslClientSocket.addHandshakeCompletedListener(connectionInfo::onClientHandshakeComplete)
         sslClientSocket.startHandshake()
 
-        val sslTargetSocket = ssf.createSocket(targetSocket, targetHost, targetPort, true) as SSLSocket
+        val sslTargetSocket = ssf.createSocket(targetSocket, dest.hostString, dest.port, true) as SSLSocket
         sslTargetSocket.useClientMode = true
-        sslTargetSocket.addHandshakeCompletedListener { listener ->
-            log.info("Handshake to $targetHost complete with cipher ${listener.cipherSuite}")
-        }
+        sslTargetSocket.addHandshakeCompletedListener(connectionInfo::onTargetHandshakeComplete)
         sslTargetSocket.startHandshake()
-
-        val context = ConnectionInfo(targetHost, targetPort)
 
         sslClientSocket.inputStream.use { clientIn ->
             sslClientSocket.outputStream.use { clientOut ->
                 sslTargetSocket.inputStream.use { serverIn ->
                     sslTargetSocket.outputStream.buffered().use { serverOut ->
-                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(context, sslContext, clientIn, serverOut) }
-                        val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(context, serverIn, clientOut) }
+                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(connectionInfo, clientIn, serverOut) }
+                        val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(connectionInfo, serverIn, clientOut) }
                         try {
                             t1.get()
                             t2.get()
@@ -175,14 +166,13 @@ class InterceptingForwardProxy private constructor(
             }
         }
 
-        sslTargetSocket.close()
-        sslClientSocket.close()
+        sslTargetSocket.closeQuietly()
+        sslClientSocket.closeQuietly()
 
     }
 
     private fun transferDataFromClientToTarget(
         context: ConnectionInfo,
-        sslContext: SSLContext,
         source: InputStream,
         out: OutputStream
     ) {
@@ -193,7 +183,7 @@ class InterceptingForwardProxy private constructor(
             requestParser.feed(buffer, 0, bytesRead, object : ConnectionInterceptor {
                 override fun acceptConnection(
                     clientSocket: Socket, method: String, requestTarget: String, httpVersion: String
-                ) = sslContext
+                ) = context
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     listener.onRequestHeadersReady(connection, request)
@@ -288,8 +278,25 @@ class InterceptingForwardProxyConfig {
     var shutdownExecutorOnClose: Boolean? = null
 }
 
-@JvmRecord
-data class ConnectionInfo(
-    val targetHost: String,
-    val targetPort: Int,
-)
+
+interface ConnectionInfo {
+    fun sslContext() : SSLContext
+    fun targetAddress() : InetSocketAddress
+    fun onClientHandshakeComplete(event: HandshakeCompletedEvent) {
+        log.info("Handshake to ${event.socket} for ${targetAddress()} complete with cipher ${event.cipherSuite}")
+    }
+    fun onTargetHandshakeComplete(event: HandshakeCompletedEvent) {
+        log.info("Handshake to ${event.socket} for ${targetAddress()} complete with cipher ${event.cipherSuite}")
+    }
+
+    companion object {
+        private val log = LoggerFactory.getLogger(ConnectionInfo::class.java)
+        fun fromTarget(requestTarget: String) : InetSocketAddress {
+            val bits = requestTarget.split(":")
+            if (bits.size != 2) throw IllegalArgumentException("requestTarget is not in format host:port")
+            val port = bits[1].toIntOrNull() ?: throw IllegalArgumentException("requestTarget is not in format host:port")
+            return InetSocketAddress(bits[0], port)
+        }
+    }
+}
+

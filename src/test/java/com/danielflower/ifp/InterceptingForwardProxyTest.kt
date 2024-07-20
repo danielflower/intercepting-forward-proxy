@@ -7,7 +7,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
-import org.hamcrest.MatcherAssert
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers
 import org.hamcrest.Matchers.equalTo
@@ -16,6 +15,7 @@ import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
+import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
 import java.net.URI
@@ -30,15 +30,6 @@ import javax.net.ssl.TrustManager
 
 class InterceptingForwardProxyTest {
 
-    private val trustManager = InterceptingForwardProxy.createTrustManager(
-        classpathPath = "/test-certs/ca.p12",
-        password = "password".toCharArray()
-    )
-    private val serverSslContext = InterceptingForwardProxy.createSSLContext(
-        classpathPath = "/test-certs/proxy-server.p12",
-        password = "password".toCharArray(),
-        trustManager = trustManager
-    )
 
     @Test
     fun `it can proxy requests without bodies`() {
@@ -56,7 +47,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = serverSslContext
+                ) = ConnectionInfoImpl(ConnectionInfo.fromTarget(requestTarget), serverSslContext)
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     request.addHeader("added-by-interceptor", "it was")
@@ -71,8 +62,8 @@ class InterceptingForwardProxyTest {
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
                     client.call(target.uri().resolve("/hey").toRequest()).use { resp ->
-                        MatcherAssert.assertThat(resp.code, Matchers.equalTo(200))
-                        MatcherAssert.assertThat(resp.body?.string(), Matchers.equalTo("A target says what? it was"))
+                        assertThat(resp.code, equalTo(200))
+                        assertThat(resp.body?.string(), equalTo("A target says what? it was"))
                     }
                 }
             }
@@ -80,6 +71,45 @@ class InterceptingForwardProxyTest {
             target.stop()
         }
     }
+
+    @Test
+    fun `the destination server can be changed`() {
+
+        // we start target at a local host url
+        // then request to somewhere else (example.org url)
+        // but return the local target server in the acceptConnection function
+
+        val target = anHttpsServer()
+            .addHandler(Method.POST, "/hey") { req, resp, _ ->
+                resp.write("Request host is ${req.uri().host} ${req.readBodyAsString()}")
+            }
+            .start()
+
+        try {
+            val listener = object : ConnectionInterceptor {
+                override fun acceptConnection(
+                    clientSocket: Socket,
+                    method: String,
+                    requestTarget: String,
+                    httpVersion: String
+                ) = ConnectionInfoImpl(InetSocketAddress("localhost", target.uri().port), serverSslContext)
+            }
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
+                val client = okHttpClient(proxy)
+                val body = "0123456789-".repeat(10)
+                client.call(
+                    URI.create("https://original-target.example.org:1234/hey").toRequest()
+                        .post(body.toRequestBody("text/plain;charset=utf-8".toMediaType()))
+                ).use { resp ->
+                    assertThat(resp.code, equalTo(200))
+                    assertThat(resp.body?.string(), equalTo("Request host is original-target.example.org $body"))
+                }
+            }
+        } finally {
+            target.stop()
+        }
+    }
+
 
     @Test
     fun `it can proxy fixed size request bodies`() {
@@ -97,7 +127,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = serverSslContext
+                ) = ConnectionInfoImpl.fromTarget(requestTarget)
             }
             InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
                 val client = okHttpClient(proxy)
@@ -107,8 +137,8 @@ class InterceptingForwardProxyTest {
                         target.uri().resolve("/hey").toRequest()
                             .post(body.toRequestBody("text/plain;charset=utf-8".toMediaType()))
                     ).use { resp ->
-                        MatcherAssert.assertThat(resp.code, Matchers.equalTo(200))
-                        MatcherAssert.assertThat(resp.body?.string(), Matchers.equalTo("A target says what? $body"))
+                        assertThat(resp.code, equalTo(200))
+                        assertThat(resp.body?.string(), equalTo("A target says what? $body"))
                     }
                 }
             }
@@ -133,7 +163,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = serverSslContext
+                ) = ConnectionInfoImpl.fromTarget(requestTarget)
             }
             InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
                 val client = okHttpClient(proxy)
@@ -153,10 +183,10 @@ class InterceptingForwardProxyTest {
                                 }
                             })
                     ).use { resp ->
-                        MatcherAssert.assertThat(resp.code, Matchers.equalTo(200))
-                        MatcherAssert.assertThat(
+                        assertThat(resp.code, equalTo(200))
+                        assertThat(
                             resp.body?.string(),
-                            Matchers.equalTo("A target says what? 你好 $body The final chunk")
+                            equalTo("A target says what? 你好 $body The final chunk")
                         )
                     }
                 }
@@ -183,7 +213,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = serverSslContext
+                ) = ConnectionInfoImpl.fromTarget(requestTarget)
             }
             InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
 
@@ -208,7 +238,7 @@ class InterceptingForwardProxyTest {
                                 plaintextInputStream.readNBytes(expectedConnectResp.length),
                                 StandardCharsets.US_ASCII
                             )
-                            MatcherAssert.assertThat(connectResp, Matchers.equalTo(expectedConnectResp))
+                            assertThat(connectResp, equalTo(expectedConnectResp))
 
                             clientSocket.outputStream.use { sslOutputStream ->
                                 clientSocket.inputStream.use { sslInputStream ->
@@ -260,20 +290,20 @@ class InterceptingForwardProxyTest {
                                             line = reader.readLine()
                                             lines.addLast(line)
                                         }
-                                        MatcherAssert.assertThat(
+                                        assertThat(
                                             lines, Matchers.contains(
-                                                Matchers.equalTo("HTTP/1.1 200 OK"),
+                                                equalTo("HTTP/1.1 200 OK"),
                                                 Matchers.startsWith("date: "),
-                                                Matchers.equalTo("content-type: text/plain;charset=utf-8"),
-                                                Matchers.equalTo("content-length: 30"),
-                                                Matchers.equalTo(""),
-                                                Matchers.equalTo("A target says what? Wikipedia"),
-                                                Matchers.equalTo("HTTP/1.1 200 OK"),
+                                                equalTo("content-type: text/plain;charset=utf-8"),
+                                                equalTo("content-length: 30"),
+                                                equalTo(""),
+                                                equalTo("A target says what? Wikipedia"),
+                                                equalTo("HTTP/1.1 200 OK"),
                                                 Matchers.startsWith("date: "),
-                                                Matchers.equalTo("content-type: text/plain;charset=utf-8"),
-                                                Matchers.equalTo("content-length: 30"),
-                                                Matchers.equalTo(""),
-                                                Matchers.equalTo("A target says what? Wikipedia"),
+                                                equalTo("content-type: text/plain;charset=utf-8"),
+                                                equalTo("content-length: 30"),
+                                                equalTo(""),
+                                                equalTo("A target says what? Wikipedia"),
                                             )
                                         )
                                     }
@@ -326,7 +356,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = serverSslContext
+                ) = ConnectionInfoImpl.fromTarget(requestTarget)
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     actual.append("websocket? ${request.isWebsocketUpgrade()}\n")
@@ -369,29 +399,51 @@ class InterceptingForwardProxyTest {
 
 
 
-    private fun okHttpClient(proxy: InterceptingForwardProxy): OkHttpClient {
-        val sslContext = SSLContext.getInstance("TLS")
-        sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
-        return OkHttpClient.Builder()
-            .sslSocketFactory(sslContext.socketFactory, trustManager)
-            .hostnameVerifier { _, _ -> true }
-            .proxy(Proxy(Proxy.Type.HTTP, proxy.address()))
-            .build()
-    }
-
-
-    private fun anHttpsServer(): MuServerBuilder = MuServerBuilder.httpsServer()
-        .withHttpsConfig(
-            HttpsConfigBuilder.httpsConfig()
-                .withKeystoreFromClasspath("/test-certs/target-server.p12")
-                .withKeystoreType("PKCS12")
-                .withKeystorePassword("password")
-                .withKeyPassword("password")
+    companion object {
+        val trustManager = InterceptingForwardProxy.createTrustManager(
+            classpathPath = "/test-certs/ca.p12",
+            password = "password".toCharArray()
+        )
+        val serverSslContext = InterceptingForwardProxy.createSSLContext(
+            classpathPath = "/test-certs/proxy-server.p12",
+            password = "password".toCharArray(),
+            trustManager = trustManager
         )
 
+        fun okHttpClient(proxy: InterceptingForwardProxy): OkHttpClient {
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
+            return OkHttpClient.Builder()
+                .sslSocketFactory(sslContext.socketFactory, trustManager)
+                .hostnameVerifier { _, _ -> true }
+                .proxy(Proxy(Proxy.Type.HTTP, proxy.address()))
+                .build()
+        }
 
+        data class ConnectionInfoImpl(
+            val targetAddress: InetSocketAddress,
+            val sslContext: SSLContext,
+        ) : ConnectionInfo {
+            override fun sslContext() = sslContext
+            override fun targetAddress() = targetAddress
+            companion object {
+                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.fromTarget(target), serverSslContext)
+
+            }
+        }
+    }
 }
 
-private fun URI.toRequest() = Request.Builder().url(this.toURL())
-private fun OkHttpClient.call(request: Request.Builder) = this.newCall(request.build()).execute()
-private fun String.ascii() = this.toByteArray(StandardCharsets.US_ASCII)
+fun URI.toRequest() = Request.Builder().url(this.toURL())
+fun OkHttpClient.call(request: Request.Builder) = this.newCall(request.build()).execute()
+fun String.ascii() = this.toByteArray(StandardCharsets.US_ASCII)
+fun anHttpsServer(): MuServerBuilder = MuServerBuilder.httpsServer()
+    .withHttpsConfig(
+        HttpsConfigBuilder.httpsConfig()
+            .withKeystoreFromClasspath("/test-certs/target-server.p12")
+            .withKeystoreType("PKCS12")
+            .withKeystorePassword("password")
+            .withKeyPassword("password")
+    )
+
+
