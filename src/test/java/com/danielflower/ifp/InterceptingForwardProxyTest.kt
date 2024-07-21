@@ -45,7 +45,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(ConnectionInfo.fromTarget(requestTarget), serverSslContext)
+                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     request.addHeader("added-by-interceptor", "it was")
@@ -414,7 +414,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(ConnectionInfo.fromTarget(requestTarget), serverSslContext)
+                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
 
                 override fun onConnectionEnded(
                     connection: ConnectionInfo,
@@ -489,7 +489,7 @@ class InterceptingForwardProxyTest {
             override fun sslContext() = sslContext
             override fun targetAddress() = targetAddress
             companion object {
-                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.fromTarget(target), serverSslContext)
+                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(target), serverSslContext)
 
             }
         }

@@ -300,7 +300,8 @@ interface ConnectionInfo {
 
     companion object {
         private val log = LoggerFactory.getLogger(ConnectionInfo::class.java)
-        fun fromTarget(requestTarget: String) : InetSocketAddress {
+        @JvmStatic
+        fun requestTargetToSocketAddress(requestTarget: String) : InetSocketAddress {
             val bits = requestTarget.split(":")
             if (bits.size != 2) throw IllegalArgumentException("requestTarget is not in format host:port")
             val port = bits[1].toIntOrNull() ?: throw IllegalArgumentException("requestTarget is not in format host:port")
