@@ -146,48 +146,23 @@ class InterceptingForwardProxy private constructor(
         sslTargetSocket.startHandshake()
 
         val t1: Future<*> = executorService.submit {
-            sslClientSocket.inputStream.use { clientIn ->
-                sslTargetSocket.outputStream.use { serverOut ->
-                    transferDataFromClientToTarget(connectionInfo, clientIn, serverOut)
-                }
-                log.info("Finished from client to target")
-            }
+            transferDataFromClientToTarget(connectionInfo, sslClientSocket.inputStream, sslTargetSocket.outputStream)
+            sslClientSocket.shutdownInputQuietly()
+            sslTargetSocket.shutdownOutputQuietly()
+            log.info("Finished from client to target")
         }
-
-
-
         val t2: Future<*> = executorService.submit {
-            sslClientSocket.outputStream.use { clientOut ->
-                sslTargetSocket.inputStream.use { serverIn ->
-                    val wrapped = object : InputStream() {
-                        override fun read(): Int {
-                            return serverIn.read()
-                        }
-
-                        override fun transferTo(out: OutputStream?): Long {
-                            return super.transferTo(out)
-                        }
-
-                        override fun read(b: ByteArray, off: Int, len: Int): Int {
-                            return serverIn.read(b, off, len)
-                        }
-
-                        override fun close() {
-                            log.info("who called")
-                            super.close()
-                        }
-
-                    }
-                    transferDataFromTargetToClient(connectionInfo, wrapped, clientOut)
-                }
-                log.info("Finished from target to client")
-            }
+            transferDataFromTargetToClient(sslTargetSocket.inputStream, sslClientSocket.outputStream)
+            sslTargetSocket.shutdownInputQuietly()
+            sslClientSocket.shutdownOutputQuietly()
+            log.info("Finished from target to client")
         }
 
         val clientToTargetException : Exception? = try {
             t1.get()
             null
         } catch (e: Exception) { e }
+
         val targetToClientException: Exception? = try {
             t2.get()
             null
@@ -228,21 +203,13 @@ class InterceptingForwardProxy private constructor(
             })
             out.flush()
         }
-        source.closeQuietly()
-        out.closeQuietly()
     }
 
-    private fun transferDataFromTargetToClient(context: ConnectionInfo, source: InputStream, out: OutputStream) {
-        try {
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
-            while (source.read(buffer).also { bytesRead = it } != -1) {
-                out.write(buffer, 0, bytesRead)
-            }
-            source.closeQuietly()
-            out.closeQuietly()
-        } catch (e: Exception) {
-            throw e
+    private fun transferDataFromTargetToClient(source: InputStream, out: OutputStream) {
+        val buffer = ByteArray(8192)
+        var bytesRead: Int
+        while (source.read(buffer).also { bytesRead = it } != -1) {
+            out.write(buffer, 0, bytesRead)
         }
     }
 
@@ -281,6 +248,14 @@ private fun Closeable.closeQuietly() {
         this.close()
     } catch (_: IOException) {
     }
+}
+private fun Socket.shutdownInputQuietly() {
+    try { this.shutdownInput() }
+    catch (_: IOException) { }
+}
+private fun Socket.shutdownOutputQuietly() {
+    try { this.shutdownOutput() }
+    catch (_: IOException) { }
 }
 
 /**
