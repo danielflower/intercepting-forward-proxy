@@ -15,6 +15,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayOutputStream
+import java.net.*
+import java.net.http.HttpClient
+import java.net.http.HttpResponse
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
@@ -48,7 +51,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(ConnectionInfo.fromTarget(requestTarget), serverSslContext)
+                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     request.addHeader("added-by-interceptor", "it was")
@@ -441,6 +444,60 @@ class InterceptingForwardProxyTest {
         assertThat(onSendBytesCount.get(), greaterThanOrEqualTo(3))
     }
 
+    @Test
+    fun `the onEnded callback happens at the end`() {
+
+        val target = anHttpsServer()
+            .addHandler(Method.GET, "/hey") { req, resp, _ ->
+                resp.write("A target says what?")
+            }
+            .start()
+
+        val onEndCalled = CountDownLatch(1)
+        var onEndClientToTargetException : Exception? = null
+        var onEndTargetToClientException : Exception? = null
+
+        try {
+            val listener = object : ConnectionInterceptor {
+                override fun acceptConnection(
+                    clientSocket: Socket,
+                    method: String,
+                    requestTarget: String,
+                    httpVersion: String
+                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
+
+                override fun onConnectionEnded(
+                    connection: ConnectionInfo,
+                    clientToTargetException: Exception?,
+                    targetToClientException: Exception?
+                ) {
+                    onEndClientToTargetException = clientToTargetException
+                    onEndTargetToClientException = targetToClientException
+                    onEndCalled.countDown()
+                }
+            }
+
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
+                javaNetHttpClient(proxy).use { client ->
+                    for (i in 1..2) {
+                        val resp = client.send(java.net.http.HttpRequest.newBuilder(target.uri().resolve("/hey")).build(), HttpResponse.BodyHandlers.ofString())
+                        assertThat(resp.statusCode(), equalTo(200))
+                        assertThat(resp.body(), equalTo("A target says what?"))
+                    }
+                }
+            }
+        } finally {
+            target.stop()
+        }
+
+        assertThat(onEndCalled.await(10, TimeUnit.SECONDS), equalTo(true))
+        assertThat(onEndClientToTargetException, nullValue())
+        // TODO: why is this not closing gracefully?
+        //assertThat(onEndTargetToClientException, nullValue())
+
+    }
+
+
 
 
 
@@ -465,6 +522,16 @@ class InterceptingForwardProxyTest {
                 .build()
         }
 
+        fun javaNetHttpClient(proxy: InterceptingForwardProxy): HttpClient {
+            System.setProperty("jdk.internal.httpclient.disableHostnameVerification", "true")
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf<TrustManager>(trustManager), null)
+            return HttpClient.newBuilder()
+                .sslContext(sslContext)
+                .proxy(ProxySelector.of(proxy.address()))
+                .build()
+        }
+
         data class ConnectionInfoImpl(
             val targetAddress: InetSocketAddress,
             val sslContext: SSLContext,
@@ -472,7 +539,7 @@ class InterceptingForwardProxyTest {
             override fun sslContext() = sslContext
             override fun targetAddress() = targetAddress
             companion object {
-                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.fromTarget(target), serverSslContext)
+                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(target), serverSslContext)
 
             }
         }

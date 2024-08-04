@@ -145,29 +145,34 @@ class InterceptingForwardProxy private constructor(
         sslTargetSocket.addHandshakeCompletedListener(connectionInfo::onTargetHandshakeComplete)
         sslTargetSocket.startHandshake()
 
-        sslClientSocket.inputStream.use { clientIn ->
-            sslClientSocket.outputStream.use { clientOut ->
-                sslTargetSocket.inputStream.use { serverIn ->
-                    sslTargetSocket.outputStream.buffered().use { serverOut ->
-                        val t1: Future<*> = executorService.submit { transferDataFromClientToTarget(connectionInfo, clientIn, serverOut) }
-                        val t2: Future<*> = executorService.submit { transferDataFromTargetToClient(connectionInfo, serverIn, clientOut) }
-                        try {
-                            t1.get()
-                            t2.get()
-                        } catch (e: Exception) {
-                            if (e is InterruptedException || e is InterruptedIOException || Thread.currentThread().isInterrupted) {
-                                // it's finished
-                            } else {
-                                throw e
-                            }
-                        }
-                    }
-                }
-            }
+        val t1: Future<*> = executorService.submit {
+            transferDataFromClientToTarget(connectionInfo, sslClientSocket.inputStream, sslTargetSocket.outputStream)
+            sslClientSocket.shutdownInputQuietly()
+            sslTargetSocket.shutdownOutputQuietly()
+            log.info("Finished from client to target")
         }
+        val t2: Future<*> = executorService.submit {
+            transferDataFromTargetToClient(sslTargetSocket.inputStream, sslClientSocket.outputStream)
+            sslTargetSocket.shutdownInputQuietly()
+            sslClientSocket.shutdownOutputQuietly()
+            log.info("Finished from target to client")
+        }
+
+        val clientToTargetException : Exception? = try {
+            t1.get()
+            null
+        } catch (e: Exception) { e }
+
+        val targetToClientException: Exception? = try {
+            t2.get()
+            null
+        } catch (e: Exception) { e }
+
 
         sslTargetSocket.closeQuietly()
         sslClientSocket.closeQuietly()
+
+        listener.onConnectionEnded(connectionInfo, clientToTargetException, targetToClientException)
 
     }
 
@@ -208,18 +213,14 @@ class InterceptingForwardProxy private constructor(
             })
             out.flush()
         }
-        source.closeQuietly()
-        out.closeQuietly()
     }
 
-    private fun transferDataFromTargetToClient(context: ConnectionInfo, source: InputStream, out: OutputStream) {
+    private fun transferDataFromTargetToClient(source: InputStream, out: OutputStream) {
         val buffer = ByteArray(8192)
         var bytesRead: Int
         while (source.read(buffer).also { bytesRead = it } != -1) {
             out.write(buffer, 0, bytesRead)
         }
-        source.closeQuietly()
-        out.closeQuietly()
     }
 
 
@@ -257,6 +258,14 @@ private fun Closeable.closeQuietly() {
         this.close()
     } catch (_: IOException) {
     }
+}
+private fun Socket.shutdownInputQuietly() {
+    try { this.shutdownInput() }
+    catch (_: IOException) { }
+}
+private fun Socket.shutdownOutputQuietly() {
+    try { this.shutdownOutput() }
+    catch (_: IOException) { }
 }
 
 /**
@@ -301,7 +310,8 @@ interface ConnectionInfo {
 
     companion object {
         private val log = LoggerFactory.getLogger(ConnectionInfo::class.java)
-        fun fromTarget(requestTarget: String) : InetSocketAddress {
+        @JvmStatic
+        fun requestTargetToSocketAddress(requestTarget: String) : InetSocketAddress {
             val bits = requestTarget.split(":")
             if (bits.size != 2) throw IllegalArgumentException("requestTarget is not in format host:port")
             val port = bits[1].toIntOrNull() ?: throw IllegalArgumentException("requestTarget is not in format host:port")
