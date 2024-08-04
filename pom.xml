@@ -6,7 +6,7 @@
 
     <groupId>com.danielflower</groupId>
     <artifactId>intercepting-forward-proxy</artifactId>
-    <version>4.0-SNAPSHOT</version>
+    <version>5.0-SNAPSHOT</version>
     <name>Intercepting Forward Proxy</name>
     <description>A Java library for creating a forward proxy that can inspect and intercept SSL traffic</description>
     <url>https://github.com/danielflower/intercepting-forward-proxy/</url>

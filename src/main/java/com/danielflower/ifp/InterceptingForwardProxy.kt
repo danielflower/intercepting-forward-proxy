@@ -190,10 +190,20 @@ class InterceptingForwardProxy private constructor(
                     request.writeTo(out)
                 }
 
-                override fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                    listener.onRequestBodyRawBytes(connection, request, array, offset, length)
                     listener.onBytesToProxy(connection, request, array, offset, length)
                     out.write(array, offset, length)
                 }
+
+                override fun onRequestBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                    listener.onRequestBodyContentBytes(connection, request, array, offset, length)
+                }
+
+                override fun onRequestEnded(request: HttpRequest) {
+                    listener.onRequestEnded(request)
+                }
+
 
             })
             out.flush()

@@ -120,16 +120,16 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                         } else if (req.hasChunkedBody()) {
                             state = ParseState.CHUNK_START
                         } else {
-                            onRequestEnded()
+                            onRequestEnded(listener)
                         }
                         listener.onRequestHeadersReady(connectionInfo, req)
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.FIXED_SIZE_BODY -> {
-                    val numberSent = sendBytes(listener, bytes, offset, length, i)
+                    val numberSent = sendBytes(listener, bytes, offset, length, i, offset, length)
                     i += numberSent - 1 // subtracting one because there is an i++ below
                     if (remainingBytesToProxy == 0L) {
-                        onRequestEnded()
+                        onRequestEnded(listener)
                     }
                 }
                 ParseState.CHUNK_START -> {
@@ -171,7 +171,9 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                         val chunkHeaderLen = i - start + 1
                         remainingBytesToProxy = (chunkDataSize + chunkHeaderLen + (if (consumeTrailingCRLF) 2 else 0)).toLong()
                         i = maxOf(0, i - chunkHeaderLen + 1)
-                        val written = sendBytes(listener, bytes, offset, length, i)
+                        val contentOffset = offset + chunkHeaderLen
+                        val contentLength = minOf(chunkDataSize, length - contentOffset)
+                        val written = sendBytes(listener, bytes, offset, length, i, contentOffset, contentLength)
                         i += written
                         state = if (remainingBytesToProxy == 0L && chunkDataSize == 0) {
                             i--
@@ -186,7 +188,7 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.CHUNK_DATA -> {
-                    val numberSent = sendBytes(listener, bytes, offset, length, i)
+                    val numberSent = sendBytes(listener, bytes, offset, length, i, offset, minOf(length, remainingBytesToProxy.toInt() - 2))
                     i += numberSent - 1 // subtracting one because there is an i++ below
                     if (remainingBytesToProxy == 0L) {
                         state = ParseState.CHUNK_START
@@ -202,8 +204,8 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                 }
                 ParseState.CHUNKED_BODY_ENDING -> {
                     if (b.isLF()) {
-                        listener.onBytesToProxy(connectionInfo, request, CRLF, 0, 2)
-                        onRequestEnded()
+                        listener.onRequestBodyRawBytes(connectionInfo, request, CRLF, 0, 2)
+                        onRequestEnded(listener)
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.TRAILERS -> {
@@ -215,14 +217,14 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                         if (trailerPart.endsWith("\r\n\r\n")) {
                             buffer.setLength(0)
                             val trailerBytes = trailerPart.toByteArray(StandardCharsets.US_ASCII)
-                            listener.onBytesToProxy(connectionInfo, request, trailerBytes, 0, trailerBytes.size)
-                            onRequestEnded()
+                            listener.onRequestBodyRawBytes(connectionInfo, request, trailerBytes, 0, trailerBytes.size)
+                            onRequestEnded(listener)
                         }
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.WEBSOCKET -> {
                     val remaining = length - i
-                    listener.onBytesToProxy(connectionInfo, request, bytes, i, remaining)
+                    listener.onRequestBodyRawBytes(connectionInfo, request, bytes, i, remaining)
                     i += remaining - 1 // -1 because there is a i++ below
                 }
             }
@@ -236,25 +238,29 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
             assert(state == ParseState.CHUNK_START || state == ParseState.CHUNK_EXTENSIONS || state == ParseState.CHUNK_SIZE || state == ParseState.CHUNK_HEADER_ENDING)
             val numToCopy = length - start
             if (numToCopy > 0) {
-                listener.onBytesToProxy(connectionInfo, request, bytes, start, numToCopy)
+                listener.onRequestBodyRawBytes(connectionInfo, request, bytes, start, numToCopy)
             }
             copyFrom = 0
         }
     }
 
-    private fun sendBytes(listener: ConnectionInterceptor, bytes: ByteArray, offset: Int, length: Int, i: Int): Int {
+    private fun sendBytes(listener: ConnectionInterceptor, bytes: ByteArray, offset: Int, length: Int, i: Int, contentOffset: Int, contentLength: Int): Int {
         val numberToSendNow = minOf(remainingBytesToProxy, (length - i).toLong()).toInt()
-        listener.onBytesToProxy(connectionInfo, request, bytes, offset + i, numberToSendNow)
+        listener.onRequestBodyRawBytes(connectionInfo, request, bytes, offset + i, numberToSendNow)
+        if (contentLength > 0) {
+            listener.onRequestBodyContentBytes(connectionInfo, request, bytes, contentOffset + i, minOf(numberToSendNow, contentLength))
+        }
         remainingBytesToProxy -= numberToSendNow
         return numberToSendNow
     }
 
-    private fun onRequestEnded() {
+    private fun onRequestEnded(listener: ConnectionInterceptor) {
         if (this.request.isWebsocketUpgrade()) {
             this.state = ParseState.WEBSOCKET
         } else {
             this.state = ParseState.START
         }
+        listener.onRequestEnded(this.request)
         this.request = HttpRequest.empty()
     }
 

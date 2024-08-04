@@ -9,18 +9,19 @@ import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
 import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers
-import org.hamcrest.Matchers.equalTo
-import org.hamcrest.Matchers.greaterThanOrEqualTo
+import org.hamcrest.Matchers.*
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -199,13 +200,18 @@ class InterceptingForwardProxyTest {
     @ParameterizedTest
     @ValueSource(booleans = [ true, false ])
     fun `it can proxy chunked request bodies with trailers`(oneCharAtATime: Boolean) {
+        val responseDate = Mutils.toHttpDate(Date())
 
         val target = anHttpsServer()
             .addHandler(Method.POST, "/hey") { req, resp, _ ->
+                resp.headers().set(HeaderNames.DATE, responseDate)
                 resp.write("A target says what? ${req.readBodyAsString()}\n")
             }
             .start()
 
+        val rawBodyBytes = ByteArrayOutputStream()
+        val contentBodyBytes = ByteArrayOutputStream()
+        val requestBodyContents = mutableListOf<String>()
         try {
             val listener = object : ConnectionInterceptor {
                 override fun acceptConnection(
@@ -214,6 +220,19 @@ class InterceptingForwardProxyTest {
                     requestTarget: String,
                     httpVersion: String
                 ) = ConnectionInfoImpl.fromTarget(requestTarget)
+
+                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                    rawBodyBytes.write(array, offset, length)
+                }
+
+                override fun onRequestBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                    contentBodyBytes.write(array, offset, length)
+                }
+
+                override fun onRequestEnded(request: HttpRequest) {
+                    requestBodyContents.add(contentBodyBytes.toString(StandardCharsets.UTF_8))
+                    contentBodyBytes.reset()
+                }
             }
             InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
 
@@ -279,6 +298,32 @@ class InterceptingForwardProxyTest {
                                         sslOutputStream.write(chunkedRequest.ascii())
                                         sslOutputStream.flush()
                                     }
+                                    Thread.sleep(1000)
+
+                                    assertThat(
+                                        rawBodyBytes.toString(StandardCharsets.UTF_8), equalTo(
+                                            """
+                                    4
+                                    Wiki
+                                    5;name="some value"
+                                    pedia
+                                    0
+                                    Expires: "Wed, 21 Oct 2020 07:28:00 GMT"
+                                    X-Signature: abc123
+                                    
+                                    4;charset=utf8
+                                    Wiki
+                                    5
+                                    pedia
+                                    0
+                                    
+
+                                    """.trimIndent().replace("\n", "\r\n")
+                                        )
+                                    )
+
+                                    assertThat(requestBodyContents, contains("Wikipedia", "Wikipedia"))
+
 
                                     sslInputStream.bufferedReader().use { reader ->
                                         var line = reader.readLine()
@@ -293,13 +338,13 @@ class InterceptingForwardProxyTest {
                                         assertThat(
                                             lines, Matchers.contains(
                                                 equalTo("HTTP/1.1 200 OK"),
-                                                Matchers.startsWith("date: "),
+                                                equalTo("date: $responseDate"),
                                                 equalTo("content-type: text/plain;charset=utf-8"),
                                                 equalTo("content-length: 30"),
                                                 equalTo(""),
                                                 equalTo("A target says what? Wikipedia"),
                                                 equalTo("HTTP/1.1 200 OK"),
-                                                Matchers.startsWith("date: "),
+                                                equalTo("date: $responseDate"),
                                                 equalTo("content-type: text/plain;charset=utf-8"),
                                                 equalTo("content-length: 30"),
                                                 equalTo(""),
