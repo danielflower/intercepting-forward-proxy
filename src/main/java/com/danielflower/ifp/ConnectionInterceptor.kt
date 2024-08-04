@@ -43,14 +43,6 @@ interface ConnectionInterceptor {
     fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {}
 
     /**
-     * Called before request body bytes are being sent to the target server.
-     *
-     * Note this is raw data, e.g. it may contain HTTP chunked encoding markers, and trailers.
-     */
-    @Deprecated("Use onRequestBodyContentBytes or onRequestBodyRawBytes instead")
-    fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
-
-    /**
      * Called before request body content bytes are being sent to the target server.
      *
      * Unlike [#onRequestBodyRawBytes] no transfer encoding data (such as chunk metadata) is included.

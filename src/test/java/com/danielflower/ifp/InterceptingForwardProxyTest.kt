@@ -18,10 +18,6 @@ import java.io.ByteArrayOutputStream
 import java.net.*
 import java.net.http.HttpClient
 import java.net.http.HttpResponse
-import java.net.InetSocketAddress
-import java.net.Proxy
-import java.net.Socket
-import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.*
@@ -57,7 +53,7 @@ class InterceptingForwardProxyTest {
                     request.addHeader("added-by-interceptor", "it was")
                 }
 
-                override fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     Assertions.assertTrue(false, "Should not be any bytes to proxy")
                 }
             }
@@ -410,7 +406,7 @@ class InterceptingForwardProxyTest {
                     actual.append("websocket? ${request.isWebsocketUpgrade()}\n")
                 }
 
-                override fun onBytesToProxy(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     onSendBytesCount.incrementAndGet()
                 }
             }

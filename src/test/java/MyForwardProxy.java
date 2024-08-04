@@ -1,6 +1,7 @@
 // This is the code used in the README.md
 
 import com.danielflower.ifp.*;
+
 import javax.net.ssl.HandshakeCompletedEvent;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -54,8 +55,20 @@ public class MyForwardProxy {
             }
 
             @Override
-            public void onBytesToProxy(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
-                System.out.println("Sending " + length + " request body bytes");
+            public void onRequestBodyRawBytes(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
+                System.out.println("Going to send " + length + " bytes to the target");
+            }
+
+            @Override
+            public void onRequestBodyContentBytes(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
+                // This differs from the raw version in that chunked request bodies will not have chunk metedata
+                // and trailer data sent to this method. This is the method to use if the content body of a request
+                // needs inspecting.
+            }
+
+            @Override
+            public void onRequestEnded(HttpRequest request) {
+                System.out.println("request completed: " + request);
             }
 
             @Override
