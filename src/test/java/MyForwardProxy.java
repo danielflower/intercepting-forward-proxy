@@ -72,12 +72,7 @@ public class MyForwardProxy {
             }
 
             @Override
-            public void onConnectionEnded(ConnectionInfo connection, Exception clientToTargetException, Exception targetToClientException) {
-                System.out.println("Connection ended");
-            }
-
-            @Override
-            public void onResponseHeadersReady(ConnectionInfo connectionInfo, HttpRequest request, HttpResponse response) {
+            public void onResponseHeadersReady(ConnectionInfo connection, HttpRequest request, HttpResponse response) {
                 System.out.println("Response headers: " + response);
             }
 
@@ -92,8 +87,13 @@ public class MyForwardProxy {
             }
 
             @Override
-            public void onResponseEnded(ConnectionInfo connectionInfo, HttpRequest request, HttpResponse response) {
+            public void onResponseEnded(ConnectionInfo connection, HttpRequest request, HttpResponse response) {
                 System.out.println("Response ended: " + response);
+            }
+
+            @Override
+            public void onConnectionEnded(ConnectionInfo connection, Exception clientToTargetException, Exception targetToClientException) {
+                System.out.println("Connection ended");
             }
         });
         System.out.println("Started proxy at " + proxy.address());

@@ -101,7 +101,11 @@ interface ConnectionInterceptor {
         length: Int
     ) {}
 
+    /**
+     * Called after a response has ended.
+     */
     fun onResponseEnded(connectionInfo: ConnectionInfo, request: HttpRequest, response: HttpResponse) {}
+
 
 }
 

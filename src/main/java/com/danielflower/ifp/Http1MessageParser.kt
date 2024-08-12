@@ -52,7 +52,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
     private val log : Logger = LoggerFactory.getLogger(Http1MessageParser::class.java)
 
     fun feed(bytes: ByteArray, offset: Int, length: Int, listener: HttpMessageListener) {
-        log.info("${if (exchange is HttpRequest) "REQ" else "RESP"} fed $length bytes at $state")
+        if (log.isDebugEnabled) log.debug("${if (exchange is HttpRequest) "REQ" else "RESP"} fed $length bytes at $state")
         var i = offset
         while (i < offset + length) {
             val b = bytes[i]
@@ -184,7 +184,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
 
                         listener.onHeaders(connectionInfo, exchange)
                         if (messageEnd) {
-                            onRequestEnded(listener)
+                            onMessageEnded(listener)
                         }
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -192,7 +192,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                     val numberSent = sendBytes(listener, bytes, offset, length, i, offset, length)
                     i += numberSent - 1 // subtracting one because there is an i++ below
                     if (remainingBytesToProxy == 0L) {
-                        onRequestEnded(listener)
+                        onMessageEnded(listener)
                     }
                 }
                 ParseState.CHUNK_START -> {
@@ -268,7 +268,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                 ParseState.CHUNKED_BODY_ENDING -> {
                     if (b.isLF()) {
                         listener.onRawBytes(connectionInfo, exchange, CRLF, 0, 2)
-                        onRequestEnded(listener)
+                        onMessageEnded(listener)
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.TRAILERS -> {
@@ -281,7 +281,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                             buffer.setLength(0)
                             val trailerBytes = trailerPart.toByteArray(StandardCharsets.US_ASCII)
                             listener.onRawBytes(connectionInfo, exchange, trailerBytes, 0, trailerBytes.size)
-                            onRequestEnded(listener)
+                            onMessageEnded(listener)
                         }
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -321,7 +321,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
         return numberToSendNow
     }
 
-    private fun onRequestEnded(listener: HttpMessageListener) {
+    private fun onMessageEnded(listener: HttpMessageListener) {
         val exc = exchange
         this.state = if (exc is HttpRequest) {
             if (exc.isWebsocketUpgrade()) {

@@ -175,12 +175,7 @@ class InterceptingForwardProxy private constructor(
 
     }
 
-    private fun transferDataFromClientToTarget(
-        context: ConnectionInfo,
-        source: InputStream,
-        out: OutputStream,
-        requestPipeline: Queue<HttpRequest>
-    ) {
+    private fun transferDataFromClientToTarget(context: ConnectionInfo, source: InputStream, out: OutputStream, requestPipeline: Queue<HttpRequest>) {
         val buffer = ByteArray(8192)
         var bytesRead: Int
         val requestParser = Http1MessageParser(context, HttpMessageType.REQUEST)
@@ -189,8 +184,7 @@ class InterceptingForwardProxy private constructor(
 
                 override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpExchange) {
                     val request = exchange as HttpRequest
-                    log.info("onRequestHeaders $request")
-                    requestPipeline.add(request)
+                    requestPipeline.offer(request)
                     listener.onRequestHeadersReady(connectionInfo, request)
                     request.writeTo(out)
                 }
@@ -205,7 +199,6 @@ class InterceptingForwardProxy private constructor(
                 }
 
                 override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpExchange) {
-                    log.info("onRequestEnded $exchange")
                     listener.onRequestEnded(connectionInfo, exchange as HttpRequest)
                 }
             })
@@ -213,47 +206,41 @@ class InterceptingForwardProxy private constructor(
         }
     }
 
-    private fun transferDataFromTargetToClient(
-        context: ConnectionInfo,
-        source: InputStream,
-        out: OutputStream,
-        requestPipeline: Queue<HttpRequest>
-    ) {
+    private fun transferDataFromTargetToClient(context: ConnectionInfo, source: InputStream, out: OutputStream, requestPipeline: Queue<HttpRequest>) {
         val buffer = ByteArray(8192)
         var bytesRead: Int
         val responseParser = Http1MessageParser(context, HttpMessageType.RESPONSE)
+        val responseParserListener = object : HttpMessageListener {
+
+            lateinit var curRequest: HttpRequest
+
+            override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpExchange) {
+                val removed = requestPipeline.poll()
+                curRequest = removed
+                val resp = exchange as HttpResponse
+                listener.onResponseHeadersReady(connectionInfo, curRequest, resp)
+                resp.writeTo(out)
+            }
+
+            override fun onRawBytes(connection: ConnectionInfo, exchange: HttpExchange, array: ByteArray, offset: Int, length: Int) {
+                val resp = exchange as HttpResponse
+                listener.onResponseBodyRawBytes(connection, curRequest, resp, array, offset, length)
+                out.write(array, offset, length)
+            }
+
+            override fun onContentBytes(connection: ConnectionInfo, exchange: HttpExchange, array: ByteArray, offset: Int, length: Int) {
+                val resp = exchange as HttpResponse
+                listener.onResponseBodyContentBytes(connection, curRequest, resp, array, offset, length)
+            }
+
+            override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpExchange) {
+                val resp = exchange as HttpResponse
+                listener.onResponseEnded(connectionInfo, curRequest, resp)
+            }
+        }
+
         while (source.read(buffer).also { bytesRead = it } != -1) {
-            log.info("Passing $bytesRead bytes to response Parser")
-            responseParser.feed(buffer, 0, bytesRead, object : HttpMessageListener {
-
-                lateinit var curRequest : HttpRequest
-
-                override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpExchange) {
-                    log.info("onResponseHeaders $exchange")
-                    curRequest = requestPipeline.remove()
-                    val resp = exchange as HttpResponse
-                    listener.onResponseHeadersReady(connectionInfo, curRequest, resp)
-                    resp.writeTo(out)
-                }
-
-                override fun onRawBytes(connection: ConnectionInfo, exchange: HttpExchange, array: ByteArray, offset: Int, length: Int) {
-                    log.info("Sending back body bytes raw: $offset $length")
-                    val resp = exchange as HttpResponse
-                    listener.onResponseBodyRawBytes(connection, curRequest, resp, array, offset, length)
-                    out.write(array, offset, length)
-                }
-
-                override fun onContentBytes(connection: ConnectionInfo, exchange: HttpExchange, array: ByteArray, offset: Int, length: Int) {
-                    val resp = exchange as HttpResponse
-                    listener.onResponseBodyContentBytes(connection, curRequest, resp, array, offset, length)
-                }
-
-                override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpExchange) {
-                    log.info("onResponseEnded $exchange")
-                    val resp = exchange as HttpResponse
-                    listener.onResponseEnded(connectionInfo, curRequest, resp)
-                }
-            })
+            responseParser.feed(buffer, 0, bytesRead, responseParserListener)
             out.flush()
         }
     }
