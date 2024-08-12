@@ -67,7 +67,7 @@ public class MyForwardProxy {
             }
 
             @Override
-            public void onRequestEnded(HttpRequest request) {
+            public void onRequestEnded(ConnectionInfo connection, HttpRequest request) {
                 System.out.println("request completed: " + request);
             }
 
@@ -76,6 +76,25 @@ public class MyForwardProxy {
                 System.out.println("Connection ended");
             }
 
+            @Override
+            public void onResponseHeadersReady(ConnectionInfo connectionInfo, HttpRequest request, HttpResponse response) {
+                System.out.println("Response headers: " + response);
+            }
+
+            @Override
+            public void onResponseBodyRawBytes(ConnectionInfo connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
+                System.out.println("Response bytes transferring: " + length);
+            }
+
+            @Override
+            public void onResponseBodyContentBytes(ConnectionInfo connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
+                System.out.println("Response content length " + length);
+            }
+
+            @Override
+            public void onResponseEnded(ConnectionInfo connectionInfo, HttpRequest request, HttpResponse response) {
+                System.out.println("Response ended: " + response);
+            }
         });
         System.out.println("Started proxy at " + proxy.address());
         Runtime.getRuntime().addShutdownHook(new Thread(proxy::close));

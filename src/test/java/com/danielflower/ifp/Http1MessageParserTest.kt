@@ -1,11 +1,11 @@
 package com.danielflower.ifp
 
-import com.danielflower.ifp.Http1RequestParser.Companion.isTChar
+import com.danielflower.ifp.Http1MessageParser.Companion.isTChar
 import org.hamcrest.MatcherAssert
 import org.hamcrest.Matchers
 import org.junit.jupiter.api.Test
 
-class Http1RequestParserTest {
+class Http1MessageParserTest {
     @Test
     fun tcharsAreValid() {
         val chars = arrayOf('!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~', '0', '9', 'a', 'z', 'A', 'Z')

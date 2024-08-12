@@ -1,5 +1,7 @@
 package com.danielflower.ifp
 
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
 import java.text.ParseException
 
@@ -19,21 +21,43 @@ internal val CRLF = byteArrayOf(CR, LF)
 private const val ZERO = 48.toByte()
 private const val NINE = 57.toByte()
 
-internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
+internal interface HttpMessageListener {
+    fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpExchange)
+
+    fun onRawBytes(connection: ConnectionInfo, exchange: HttpExchange, array: ByteArray, offset: Int, length: Int)
+
+    fun onContentBytes(connection: ConnectionInfo, exchange: HttpExchange, array: ByteArray, offset: Int, length: Int)
+
+    fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpExchange)
+}
+
+internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, type: HttpMessageType) {
 
     private var remainingBytesToProxy: Long = 0L
-    private var state : ParseState = ParseState.START
+    private var state : ParseState
     private var buffer = StringBuilder()
-    private var request : HttpRequest = HttpRequest.empty()
+    private var exchange : HttpExchange
     private var headerName : String? = null
     private var copyFrom : Int? = null
+    init {
+        if (type == HttpMessageType.REQUEST) {
+            exchange = HttpRequest.empty()
+            state = ParseState.REQUEST_START
+        } else {
+            exchange = HttpResponse.empty()
+            state = ParseState.RESPONSE_START
+        }
+    }
 
-    fun feed(bytes: ByteArray, offset: Int, length: Int, listener: ConnectionInterceptor) {
+    private val log : Logger = LoggerFactory.getLogger(Http1MessageParser::class.java)
+
+    fun feed(bytes: ByteArray, offset: Int, length: Int, listener: HttpMessageListener) {
+        log.info("${if (exchange is HttpRequest) "REQ" else "RESP"} fed $length bytes at $state")
         var i = offset
         while (i < offset + length) {
             val b = bytes[i]
             when (state) {
-                ParseState.START -> {
+                ParseState.REQUEST_START -> {
                     if (b.isUpperCase()) {
                         state = ParseState.METHOD
                         buffer.appendChar(b)
@@ -43,7 +67,7 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                     if (b.isUpperCase()) {
                         buffer.appendChar(b)
                     } else if (b == SP) {
-                        request.method = buffer.consume()
+                        request().method = buffer.consume()
                         state = ParseState.REQUEST_TARGET
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -51,7 +75,7 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                     if (b.isVChar()) { // todo: only allow valid target chars
                         buffer.appendChar(b)
                     } else if (b == SP) {
-                        request.url = buffer.consume()
+                        request().url = buffer.consume()
                         state = ParseState.HTTP_VERSION
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -66,7 +90,39 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                 }
                 ParseState.REQUEST_LINE_ENDING -> {
                     if (b.isLF()) {
-                        request.httpVersion = buffer.consume()
+                        exchange.httpVersion = buffer.consume()
+                        state = ParseState.HEADER_START
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.RESPONSE_START -> {
+                    if (b == SP) {
+                        exchange.httpVersion = buffer.consume()
+                        state = ParseState.STATUS_CODE
+                    } else {
+                        if (b.isVChar()) {
+                            buffer.appendChar(b)
+                        } else throw ParseException("state=$state b=$b", i)
+                    }
+                }
+                ParseState.STATUS_CODE -> {
+                    if (b.isDigit()) {
+                        buffer.appendChar(b)
+                        if (buffer.length > 4) throw ParseException("status code too long", i)
+                    } else if (b == SP) {
+                        response().statusCode = buffer.consume().toInt()
+                        state = ParseState.REASON_PHRASE
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.REASON_PHRASE -> {
+                    if (b.isVChar() || b.isOWS()) {
+                        buffer.appendChar(b)
+                    } else if (b == CR) {
+                        state = ParseState.STATUS_LINE_ENDING
+                    } else throw ParseException("state=$state b=$b", i)
+                }
+                ParseState.STATUS_LINE_ENDING -> {
+                    if (b.isLF()) {
+                        response().reason = buffer.consume()
                         state = ParseState.HEADER_START
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -106,23 +162,30 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                     if (b.isLF()) {
                         val value = buffer.consume().trimEnd()
                         if (value.isEmpty()) throw ParseException("No header value for header $headerName", i)
-                        request.addHeader(headerName!!, value)
+                        exchange.headers().addHeader(headerName!!, value)
                         state = ParseState.HEADER_START
                     } else throw ParseException("No LF after CR at $state", i)
                 }
                 ParseState.HEADERS_ENDING -> {
                     if (b.isLF()) {
-                        val req = request
-                        val contentLength = req.contentLength()
+                        val req = exchange
+                        val contentLength = req.headers().contentLength()
+                        val messageEnd: Boolean
                         if (contentLength != null && contentLength > 0) {
                             state = ParseState.FIXED_SIZE_BODY
                             this.remainingBytesToProxy = contentLength
-                        } else if (req.hasChunkedBody()) {
+                            messageEnd = false
+                        } else if (req.headers().hasChunkedBody()) {
                             state = ParseState.CHUNK_START
+                            messageEnd = false
                         } else {
+                            messageEnd = true
+                        }
+
+                        listener.onHeaders(connectionInfo, exchange)
+                        if (messageEnd) {
                             onRequestEnded(listener)
                         }
-                        listener.onRequestHeadersReady(connectionInfo, req)
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.FIXED_SIZE_BODY -> {
@@ -204,7 +267,7 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                 }
                 ParseState.CHUNKED_BODY_ENDING -> {
                     if (b.isLF()) {
-                        listener.onRequestBodyRawBytes(connectionInfo, request, CRLF, 0, 2)
+                        listener.onRawBytes(connectionInfo, exchange, CRLF, 0, 2)
                         onRequestEnded(listener)
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -217,14 +280,14 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
                         if (trailerPart.endsWith("\r\n\r\n")) {
                             buffer.setLength(0)
                             val trailerBytes = trailerPart.toByteArray(StandardCharsets.US_ASCII)
-                            listener.onRequestBodyRawBytes(connectionInfo, request, trailerBytes, 0, trailerBytes.size)
+                            listener.onRawBytes(connectionInfo, exchange, trailerBytes, 0, trailerBytes.size)
                             onRequestEnded(listener)
                         }
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.WEBSOCKET -> {
                     val remaining = length - i
-                    listener.onRequestBodyRawBytes(connectionInfo, request, bytes, i, remaining)
+                    listener.onRawBytes(connectionInfo, exchange, bytes, i, remaining)
                     i += remaining - 1 // -1 because there is a i++ below
                 }
             }
@@ -238,38 +301,58 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
             assert(state == ParseState.CHUNK_START || state == ParseState.CHUNK_EXTENSIONS || state == ParseState.CHUNK_SIZE || state == ParseState.CHUNK_HEADER_ENDING)
             val numToCopy = length - start
             if (numToCopy > 0) {
-                listener.onRequestBodyRawBytes(connectionInfo, request, bytes, start, numToCopy)
+                listener.onRawBytes(connectionInfo, exchange, bytes, start, numToCopy)
             }
             copyFrom = 0
         }
     }
 
-    private fun sendBytes(listener: ConnectionInterceptor, bytes: ByteArray, offset: Int, length: Int, i: Int, contentOffset: Int, contentLength: Int): Int {
+    private fun request() = (exchange as HttpRequest)
+    private fun response() = (exchange as HttpResponse)
+
+    private fun sendBytes(listener: HttpMessageListener, bytes: ByteArray, offset: Int, length: Int, i: Int, contentOffset: Int, contentLength: Int): Int {
         val numberToSendNow = minOf(remainingBytesToProxy, (length - i).toLong()).toInt()
-        listener.onRequestBodyRawBytes(connectionInfo, request, bytes, offset + i, numberToSendNow)
+        val exc = exchange
+        listener.onRawBytes(connectionInfo, exc, bytes, offset + i, numberToSendNow)
         if (contentLength > 0) {
-            listener.onRequestBodyContentBytes(connectionInfo, request, bytes, contentOffset + i, minOf(numberToSendNow, contentLength))
+            listener.onContentBytes(connectionInfo, exc, bytes, contentOffset + i, minOf(numberToSendNow, contentLength))
         }
         remainingBytesToProxy -= numberToSendNow
         return numberToSendNow
     }
 
-    private fun onRequestEnded(listener: ConnectionInterceptor) {
-        if (this.request.isWebsocketUpgrade()) {
-            this.state = ParseState.WEBSOCKET
+    private fun onRequestEnded(listener: HttpMessageListener) {
+        val exc = exchange
+        this.state = if (exc is HttpRequest) {
+            if (exc.isWebsocketUpgrade()) {
+                ParseState.WEBSOCKET
+            } else {
+                this.exchange = HttpRequest.empty()
+                ParseState.REQUEST_START
+            }
         } else {
-            this.state = ParseState.START
+            if (exc.headers().hasHeaderValue("upgrade", "websocket")) {
+                ParseState.WEBSOCKET
+            } else {
+                this.exchange = HttpResponse.empty()
+                ParseState.RESPONSE_START
+            }
         }
-        listener.onRequestEnded(this.request)
-        this.request = HttpRequest.empty()
+        if (state != ParseState.WEBSOCKET) {
+            listener.onMessageEnded(connectionInfo, exchange)
+        }
     }
 
     private enum class ParseState {
-        START,
+        REQUEST_START,
+        RESPONSE_START,
         METHOD,
         REQUEST_TARGET,
         HTTP_VERSION,
         REQUEST_LINE_ENDING,
+        STATUS_CODE,
+        REASON_PHRASE,
+        STATUS_LINE_ENDING,
         HEADER_START,
         HEADER_NAME,
         HEADER_NAME_ENDED,
@@ -307,6 +390,7 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
         private fun Byte.isLF() = this == LF
         private fun Byte.isOWS() = this == SP || this == HTAB
         private fun Byte.toLower(): Byte = if (this < A || this > Z) this else (this + 32).toByte()
+        private fun Byte.isDigit() = this in ZERO..NINE
         private fun Byte.isHexDigit() = this in A..F || this in ZERO..NINE || this in A_LOWER..F_LOWER
         private fun StringBuilder.appendChar(b: Byte) {
             this.append(b.toInt().toChar())
@@ -321,3 +405,4 @@ internal class Http1RequestParser(private val connectionInfo: ConnectionInfo) {
     }
 }
 
+internal enum class HttpMessageType { REQUEST, RESPONSE }

@@ -36,7 +36,7 @@ class InterceptingForwardProxyTest {
 
         val target = anHttpsServer()
             .addHandler(Method.GET, "/hey") { req, resp, _ ->
-                resp.write("A target says what? ${req.headers().get("added-by-interceptor")}")
+                resp.write("${req.query()["i"]} A target says what? ${req.headers().get("added-by-interceptor")}")
             }
             .start()
 
@@ -50,20 +50,31 @@ class InterceptingForwardProxyTest {
                 ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
-                    request.addHeader("added-by-interceptor", "it was")
+                    request.headers().addHeader("added-by-interceptor", "it was")
                 }
 
                 override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     Assertions.assertTrue(false, "Should not be any bytes to proxy")
+                }
+
+                override fun onResponseEnded(
+                    connectionInfo: ConnectionInfo,
+                    httpRequest: HttpRequest,
+                    response: com.danielflower.ifp.HttpResponse
+                ) {
+                    println("** resp end **")
+                    println("httpRequest = ${httpRequest}")
+                    println("response = ${response}")
+                    println("** **")
                 }
             }
 
             InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 for (i in 1..2) {
-                    client.call(target.uri().resolve("/hey").toRequest()).use { resp ->
-                        assertThat(resp.code, equalTo(200))
-                        assertThat(resp.body?.string(), equalTo("A target says what? it was"))
+                    client.call(target.uri().resolve("/hey?i=$i").toRequest()).use { resp ->
+                        assertThat("i=$i", resp.code, equalTo(200))
+                        assertThat("i=$i", resp.body?.string(), equalTo("$i A target says what? it was"))
                     }
                 }
             }
@@ -228,7 +239,7 @@ class InterceptingForwardProxyTest {
                     contentBodyBytes.write(array, offset, length)
                 }
 
-                override fun onRequestEnded(request: HttpRequest) {
+                override fun onRequestEnded(connection: ConnectionInfo, request: HttpRequest) {
                     requestBodyContents.add(contentBodyBytes.toString(StandardCharsets.UTF_8))
                     contentBodyBytes.reset()
                 }
@@ -424,7 +435,7 @@ class InterceptingForwardProxyTest {
                 newWebSocket.send("Well hello there, ")
                 newWebSocket.send("world")
                 newWebSocket.send(bigText.encodeUtf8())
-                messagesReceivedLatch.await(20, TimeUnit.SECONDS)
+                assertThat(messagesReceivedLatch.await(20, TimeUnit.SECONDS), equalTo(true))
                 newWebSocket.close(1000, "Finished")
             }
         } finally {

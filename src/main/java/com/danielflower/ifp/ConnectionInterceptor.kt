@@ -65,7 +65,7 @@ interface ConnectionInterceptor {
      * Called when an HTTP request message has ended (this does not imply anything about the response which will usually
      * not be completed).
      */
-    fun onRequestEnded(request: HttpRequest) {}
+    fun onRequestEnded(connection: ConnectionInfo, request: HttpRequest) {}
 
     /**
      * Called when the connection ends.
@@ -81,6 +81,27 @@ interface ConnectionInterceptor {
         clientToTargetException: Exception?,
         targetToClientException: Exception?
     ) {}
+
+    fun onResponseHeadersReady(connectionInfo: ConnectionInfo, request: HttpRequest, response: HttpResponse) {}
+    fun onResponseBodyRawBytes(
+        connection: ConnectionInfo,
+        request: HttpRequest,
+        response: HttpResponse,
+        array: ByteArray,
+        offset: Int,
+        length: Int
+    ) {}
+
+    fun onResponseBodyContentBytes(
+        connection: ConnectionInfo,
+        request: HttpRequest,
+        response: HttpResponse,
+        array: ByteArray,
+        offset: Int,
+        length: Int
+    ) {}
+
+    fun onResponseEnded(connectionInfo: ConnectionInfo, request: HttpRequest, response: HttpResponse) {}
 
 }
 
