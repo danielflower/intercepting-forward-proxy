@@ -339,7 +339,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
             }
         }
         if (state != ParseState.WEBSOCKET) {
-            listener.onMessageEnded(connectionInfo, exchange)
+            listener.onMessageEnded(connectionInfo, exc)
         }
     }
 
