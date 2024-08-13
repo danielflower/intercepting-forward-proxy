@@ -339,7 +339,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
             }
         }
         if (state != ParseState.WEBSOCKET && !(exc is HttpResponse && exc.statusCode == 100)) {
-            listener.onMessageEnded(connectionInfo, exchange)
+            listener.onMessageEnded(connectionInfo, exc)
         }
     }
 
