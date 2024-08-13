@@ -215,10 +215,12 @@ class InterceptingForwardProxy private constructor(
             lateinit var curRequest: HttpRequest
 
             override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpExchange) {
-                val removed = requestPipeline.poll()
-                curRequest = removed
                 val resp = exchange as HttpResponse
-                listener.onResponseHeadersReady(connectionInfo, curRequest, resp)
+                if (resp.statusCode != 100) {
+                    val removed = requestPipeline.poll()
+                    curRequest = removed
+                    listener.onResponseHeadersReady(connectionInfo, curRequest, resp)
+                }
                 resp.writeTo(out)
             }
 

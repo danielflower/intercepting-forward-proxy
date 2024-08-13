@@ -338,7 +338,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                 ParseState.RESPONSE_START
             }
         }
-        if (state != ParseState.WEBSOCKET) {
+        if (state != ParseState.WEBSOCKET && !(exc is HttpResponse && exc.statusCode == 100)) {
             listener.onMessageEnded(connectionInfo, exchange)
         }
     }
@@ -369,6 +369,10 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
         CHUNKED_BODY_ENDING,
         TRAILERS,
         WEBSOCKET,
+    }
+
+    override fun toString(): String {
+        return javaClass.simpleName + " ${this.state}"
     }
 
     companion object {

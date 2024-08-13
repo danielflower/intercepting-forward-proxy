@@ -121,8 +121,9 @@ class InterceptingForwardProxyTest {
     }
 
 
-    @Test
-    fun `it can proxy fixed size request bodies`() {
+    @ParameterizedTest
+    @ValueSource(strings = ["expect", "noexpect"])
+    fun `it can proxy fixed size request bodies`(expect: String) {
 
         val target = anHttpsServer()
             .addHandler(Method.POST, "/hey") { req, resp, _ ->
@@ -145,6 +146,7 @@ class InterceptingForwardProxyTest {
                     val body = "0123456789-".repeat(10000 * i)
                     client.call(
                         target.uri().resolve("/hey").toRequest()
+                            .also { if (expect == "expect") it.header("expect", "100-continue") }
                             .post(body.toRequestBody("text/plain;charset=utf-8".toMediaType()))
                     ).use { resp ->
                         assertThat(resp.code, equalTo(200))
