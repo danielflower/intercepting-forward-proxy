@@ -8,7 +8,6 @@ import okio.BufferedSink
 import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
 import org.hamcrest.MatcherAssert.assertThat
-import org.hamcrest.Matchers
 import org.hamcrest.Matchers.*
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
@@ -18,6 +17,7 @@ import java.io.ByteArrayOutputStream
 import java.net.*
 import java.net.http.HttpClient
 import java.net.http.HttpResponse
+import java.net.http.HttpResponse.BodyHandlers
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.*
@@ -26,6 +26,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
 
@@ -81,6 +82,9 @@ class InterceptingForwardProxyTest {
             target.stop()
         }
     }
+
+
+
 
     @Test
     fun `the destination server can be changed`() {
@@ -157,6 +161,62 @@ class InterceptingForwardProxyTest {
         } finally {
             target.stop()
         }
+    }
+
+    @Test
+    fun `it can proxy unspecified length HTTP 1_0 response bodies`() {
+
+        val target = serverSslContext.serverSocketFactory.createServerSocket(0) as SSLServerSocket
+
+        val oldStyleServerUrl = URI("https://localhost:${target.localPort}")
+        val acceptThread = Thread {
+            target.accept().use { socket ->
+                println("Accepted")
+
+                socket.getInputStream().bufferedReader().use { reqStream ->
+                    var line: String?
+                    while (reqStream.readLine().also { line = it } != null) {
+                        if (line == "") break
+                    }
+
+                    socket.getOutputStream().writer().use { writer ->
+                        writer.write("HTTP/1.0 200 OK\r\n")
+                        writer.write("content-type: text/plain\r\n")
+                        writer.write("connection: close\r\n")
+                        writer.write("\r\n")
+                        writer.flush()
+                        writer.write("Hello ")
+                        writer.flush()
+                        writer.write("world".repeat(10000))
+                        writer.flush()
+                        writer.write("\r\n")
+                    }
+                }
+            }
+        }
+        acceptThread.start()
+
+        try {
+            val listener = object : ConnectionInterceptor {
+                override fun acceptConnection(
+                    clientSocket: Socket,
+                    method: String,
+                    requestTarget: String,
+                    httpVersion: String
+                ) = ConnectionInfoImpl.fromTarget(requestTarget)
+            }
+            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
+                val client = okHttpClient(proxy)
+                client.call(oldStyleServerUrl.resolve("/hey").toRequest()).use { resp ->
+                    assertThat(resp.code, equalTo(200))
+                    assertThat(resp.protocol, equalTo(Protocol.HTTP_1_0))
+                    assertThat(resp.body?.string(), equalTo("Hello " + "world".repeat(10000) + "\r\n"))
+                }
+            }
+        } finally {
+            target.close()
+        }
+
     }
 
     @Test
@@ -327,6 +387,8 @@ class InterceptingForwardProxyTest {
                                         sslOutputStream.write(chunkedRequest.ascii())
                                         sslOutputStream.flush()
                                     }
+
+                                    // TODO deal with this
                                     Thread.sleep(1000)
 
                                     assertThat(
