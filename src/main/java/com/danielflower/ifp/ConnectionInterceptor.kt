@@ -29,7 +29,7 @@ interface ConnectionInterceptor {
      * @param httpVersion the HTTP version used which is either `HTTP/1.1` or `HTTP/1.0`
      * @return Connection info to use if the connection should be accepted; otherwise `null` to reject the connection.
      */
-    fun acceptConnection(clientSocket: Socket, method: String, requestTarget: String, httpVersion: String): ConnectionInfo?
+    fun acceptConnection(clientSocket: Socket, method: String, requestTarget: String, httpVersion: String): connection?
 
     /**
      * Called when a request line and headers have been read, before it is forwarded to the target server.
@@ -40,7 +40,7 @@ interface ConnectionInterceptor {
      * Note that for a request with a body, such as a POST with data, this is sent before the request body
      * is read.
      */
-    fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {}
+    fun onRequestHeadersReady(connection: connection, request: HttpRequest) {}
 
     /**
      * Called before request body content bytes are being sent to the target server.
@@ -50,7 +50,7 @@ interface ConnectionInterceptor {
      *
      * Note: websocket frames are not included.
      */
-    fun onRequestBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
+    fun onRequestBodyContentBytes(connection: connection, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
 
     /**
      * Called before request body bytes are being sent to the target server.
@@ -59,13 +59,13 @@ interface ConnectionInterceptor {
      *
      * Note that websocket frames will are also included.
      */
-    fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
+    fun onRequestBodyRawBytes(connection: connection, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
 
     /**
      * Called when an HTTP request message has ended (this does not imply anything about the response which will usually
      * not be completed).
      */
-    fun onRequestEnded(connection: ConnectionInfo, request: HttpRequest) {}
+    fun onRequestEnded(connection: connection, request: HttpRequest) {}
 
     /**
      * Called when the connection ends.
@@ -77,14 +77,14 @@ interface ConnectionInterceptor {
      * bytes from the target to the client
      */
     fun onConnectionEnded(
-        connection: ConnectionInfo,
+        connection: connection,
         clientToTargetException: Exception?,
         targetToClientException: Exception?
     ) {}
 
-    fun onResponseHeadersReady(connectionInfo: ConnectionInfo, request: HttpRequest, response: HttpResponse) {}
+    fun onResponseHeadersReady(connection: connection, request: HttpRequest, response: HttpResponse) {}
     fun onResponseBodyRawBytes(
-        connection: ConnectionInfo,
+        connection: connection,
         request: HttpRequest,
         response: HttpResponse,
         array: ByteArray,
@@ -93,7 +93,7 @@ interface ConnectionInterceptor {
     ) {}
 
     fun onResponseBodyContentBytes(
-        connection: ConnectionInfo,
+        connection: connection,
         request: HttpRequest,
         response: HttpResponse,
         array: ByteArray,
@@ -104,7 +104,17 @@ interface ConnectionInterceptor {
     /**
      * Called after a response has ended.
      */
-    fun onResponseEnded(connectionInfo: ConnectionInfo, request: HttpRequest, response: HttpResponse) {}
+    fun onResponseEnded(connection: connection, request: HttpRequest, response: HttpResponse) {}
+
+    /**
+     * Called when a request is not completed, for example the client or target disconnects before the request is completed
+     */
+    fun onRequestError(connection: connection, request: HttpRequest, error: Exception) {}
+
+    /**
+     * Called when a request is not completed, for example the client or target disconnects before the request is completed
+     */
+    fun onResponseError(connection: connection, request: HttpRequest, response: HttpResponse, error: Exception) {}
 
 
 }

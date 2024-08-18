@@ -22,6 +22,7 @@ And then start a server:
 
 ```java
 import com.danielflower.ifp.*;
+
 import javax.net.ssl.HandshakeCompletedEvent;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManagerFactory;
@@ -40,7 +41,7 @@ public class MyForwardProxy {
     var proxy = InterceptingForwardProxy.start(config, new ConnectionInterceptor() {
 
       @Override
-      public ConnectionInfo acceptConnection(Socket socket, String method, String requestTarget, String httpVersion) {
+      public connection acceptConnection(Socket socket, String method, String requestTarget, String httpVersion) {
         System.out.println("Got connection from " + socket.getRemoteSocketAddress() + " to " + requestTarget);
 
         // Based on the parameters, we can decide to accept this connection by returning an SSLContext
@@ -65,54 +66,64 @@ public class MyForwardProxy {
                 "/test-certs/proxy-server.p12", "password".toCharArray(), trustManagerFactory.getTrustManagers()[0]);
         // Specify the target - here we use the target requested by the client but we can send connections wherever
         // we want.
-        InetSocketAddress targetAddress = ConnectionInfo.requestTargetToSocketAddress(requestTarget);
+        InetSocketAddress targetAddress = connection.requestTargetToSocketAddress(requestTarget);
         return new MyConnectionInfo(context, targetAddress);
       }
 
       @Override
-      public void onRequestHeadersReady(ConnectionInfo connection, HttpRequest request) {
+      public void onRequestHeadersReady(connection connection, HttpRequest request) {
         System.out.println("Proxying connection " + connection + " for request " + request);
       }
 
       @Override
-      public void onRequestBodyRawBytes(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
+      public void onRequestBodyRawBytes(connection connection, HttpRequest request, byte[] array, int offset, int length) {
         System.out.println("Going to send " + length + " bytes to the target");
       }
 
       @Override
-      public void onRequestBodyContentBytes(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
+      public void onRequestBodyContentBytes(connection connection, HttpRequest request, byte[] array, int offset, int length) {
         // This differs from the raw version in that chunked request bodies will not have chunk metedata
         // and trailer data sent to this method. This is the method to use if the content body of a request
         // needs inspecting.
       }
 
       @Override
-      public void onRequestEnded(ConnectionInfo connection, HttpRequest request) {
+      public void onRequestEnded(connection connection, HttpRequest request) {
         System.out.println("request completed: " + request);
       }
 
       @Override
-      public void onResponseHeadersReady(ConnectionInfo connection, HttpRequest request, HttpResponse response) {
+      public void onResponseHeadersReady(connection connection, HttpRequest request, HttpResponse response) {
         System.out.println("Response headers: " + response);
       }
 
       @Override
-      public void onResponseBodyRawBytes(ConnectionInfo connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
+      public void onResponseBodyRawBytes(connection connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
         System.out.println("Response bytes transferring: " + length);
       }
 
       @Override
-      public void onResponseBodyContentBytes(ConnectionInfo connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
+      public void onResponseBodyContentBytes(connection connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
         System.out.println("Response content length " + length);
       }
 
       @Override
-      public void onResponseEnded(ConnectionInfo connection, HttpRequest request, HttpResponse response) {
+      public void onResponseEnded(connection connection, HttpRequest request, HttpResponse response) {
         System.out.println("Response ended: " + response);
       }
 
       @Override
-      public void onConnectionEnded(ConnectionInfo connection, Exception clientToTargetException, Exception targetToClientException) {
+      public void onResponseError(connection connection, HttpRequest request, HttpResponse response, Exception error) {
+        System.out.println("Error while proxying response to " + request + ": " + error);
+      }
+
+      @Override
+      public void onRequestError(connection connection, HttpRequest request, Exception error) {
+        System.out.println("Error while proxying request " + request + ": " + error);
+      }
+
+      @Override
+      public void onConnectionEnded(connection connection, Exception clientToTargetException, Exception targetToClientException) {
         System.out.println("Connection ended");
       }
     });
@@ -120,7 +131,7 @@ public class MyForwardProxy {
     Runtime.getRuntime().addShutdownHook(new Thread(proxy::close));
   }
 
-  record MyConnectionInfo(SSLContext sslContext, InetSocketAddress targetAddress) implements ConnectionInfo {
+  record MyConnectionInfo(SSLContext sslContext, InetSocketAddress targetAddress) implements connection {
     @Override
     public void onClientHandshakeComplete(HandshakeCompletedEvent event) {
       System.out.println("Client TLS connection with " + event.getCipherSuite());

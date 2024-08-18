@@ -2,6 +2,7 @@ package com.danielflower.ifp
 
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.io.EOFException
 import java.nio.charset.StandardCharsets
 import java.text.ParseException
 import java.util.*
@@ -23,16 +24,17 @@ private const val ZERO = 48.toByte()
 private const val NINE = 57.toByte()
 
 internal interface HttpMessageListener {
-    fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage)
+    fun onHeaders(connectionInfo: connection, exchange: HttpMessage)
 
-    fun onRawBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
+    fun onRawBytes(connection: connection, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
 
-    fun onContentBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
+    fun onContentBytes(connection: connection, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
 
-    fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage)
+    fun onMessageEnded(connectionInfo: connection, exchange: HttpMessage)
+    fun onError(connectionInfo: connection, exchange: HttpMessage, error: Exception)
 }
 
-internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, type: HttpMessageType, private val requestQueue: Queue<HttpRequest>) {
+internal class Http1MessageParser(private val connectionInfo: connection, type: HttpMessageType, private val requestQueue: Queue<HttpRequest>) {
 
     private var remainingBytesToProxy: Long = 0L
     private var state : ParseState
@@ -320,6 +322,14 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
         }
     }
 
+    fun eof(listener: HttpMessageListener) {
+        if (state.eofAction == EOFAction.COMPLETE) {
+            listener.onMessageEnded(connectionInfo, exchange)
+        } else if (state.eofAction == EOFAction.ERROR) {
+            listener.onError(connectionInfo, exchange, EOFException("EOF when state is $state"))
+        }
+    }
+
     private fun request() = (exchange as HttpRequest)
     private fun response() = (exchange as HttpResponse)
 
@@ -356,34 +366,40 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
         }
     }
 
-    private enum class ParseState {
-        REQUEST_START,
-        RESPONSE_START,
-        METHOD,
-        REQUEST_TARGET,
-        HTTP_VERSION,
-        REQUEST_LINE_ENDING,
-        STATUS_CODE,
-        REASON_PHRASE,
-        STATUS_LINE_ENDING,
-        HEADER_START,
-        HEADER_NAME,
-        HEADER_NAME_ENDED,
-        HEADER_VALUE,
-        HEADER_VALUE_ENDING,
-        HEADERS_ENDING,
-        FIXED_SIZE_BODY,
-        UNSPECIFIED_BODY,
-        CHUNK_START,
-        CHUNK_SIZE,
-        CHUNK_EXTENSIONS,
-        CHUNK_HEADER_ENDING,
-        CHUNK_DATA,
-        LAST_CHUNK,
-        CHUNKED_BODY_ENDING,
-        TRAILERS,
-        WEBSOCKET,
+    fun error(e: Exception, messageListener: HttpMessageListener) {
+        messageListener.onError(connectionInfo, exchange, e)
     }
+
+    private enum class ParseState(val eofAction: EOFAction) {
+        REQUEST_START(EOFAction.NOTHING),
+        RESPONSE_START(EOFAction.NOTHING),
+        METHOD(EOFAction.ERROR),
+        REQUEST_TARGET(EOFAction.ERROR),
+        HTTP_VERSION(EOFAction.ERROR),
+        REQUEST_LINE_ENDING(EOFAction.ERROR),
+        STATUS_CODE(EOFAction.ERROR),
+        REASON_PHRASE(EOFAction.ERROR),
+        STATUS_LINE_ENDING(EOFAction.ERROR),
+        HEADER_START(EOFAction.ERROR),
+        HEADER_NAME(EOFAction.ERROR),
+        HEADER_NAME_ENDED(EOFAction.ERROR),
+        HEADER_VALUE(EOFAction.ERROR),
+        HEADER_VALUE_ENDING(EOFAction.ERROR),
+        HEADERS_ENDING(EOFAction.ERROR),
+        FIXED_SIZE_BODY(EOFAction.ERROR),
+        UNSPECIFIED_BODY(EOFAction.COMPLETE),
+        CHUNK_START(EOFAction.ERROR),
+        CHUNK_SIZE(EOFAction.ERROR),
+        CHUNK_EXTENSIONS(EOFAction.ERROR),
+        CHUNK_HEADER_ENDING(EOFAction.ERROR),
+        CHUNK_DATA(EOFAction.ERROR),
+        LAST_CHUNK(EOFAction.ERROR),
+        CHUNKED_BODY_ENDING(EOFAction.ERROR),
+        TRAILERS(EOFAction.ERROR),
+        WEBSOCKET(EOFAction.COMPLETE),
+    }
+
+    private enum class EOFAction { NOTHING, ERROR, COMPLETE }
 
     override fun toString(): String {
         return javaClass.simpleName + " ${this.state}"
