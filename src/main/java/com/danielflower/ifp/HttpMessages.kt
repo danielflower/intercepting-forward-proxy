@@ -163,7 +163,7 @@ data class HttpResponse(
         // 6.3.3
         val cl = headers.getAll("content-length")
         val isChunked = headers.hasChunkedBody()
-        if (isChunked && cl.isEmpty()) throw IllegalStateException("A response has chunked encoding and content-length $cl")
+        if (isChunked && cl.isNotEmpty()) throw IllegalStateException("A response has chunked encoding and content-length $cl")
         // 6.3.4, except this assumes only a single transfer-encoding value
         if (isChunked) return BodySize.CHUNKED
         return if (cl.isEmpty()) {

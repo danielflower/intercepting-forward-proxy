@@ -51,18 +51,18 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(connection.requestTargetToSocketAddress(requestTarget), serverSslContext)
+                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
 
-                override fun onRequestHeadersReady(connection: connection, request: HttpRequest) {
+                override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     request.headers().addHeader("added-by-interceptor", "it was")
                 }
 
-                override fun onRequestBodyRawBytes(connection: connection, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     Assertions.assertTrue(false, "Should not be any bytes to proxy")
                 }
 
                 override fun onResponseEnded(
-                    connection: connection,
+                    connection: ConnectionInfo,
                     httpRequest: HttpRequest,
                     response: com.danielflower.ifp.HttpResponse
                 ) {}
@@ -206,7 +206,7 @@ class InterceptingForwardProxyTest {
                 ) = ConnectionInfoImpl.fromTarget(requestTarget)
 
                 override fun onResponseEnded(
-                    connection: connection,
+                    connection: ConnectionInfo,
                     request: HttpRequest,
                     response: com.danielflower.ifp.HttpResponse
                 ) {
@@ -236,7 +236,13 @@ class InterceptingForwardProxyTest {
 
         val target = anHttpsServer()
             .addHandler(Method.POST, "/hey") { req, resp, _ ->
-                resp.write("A target says what? ${req.readBodyAsString()}")
+                resp.writer().use { writer ->
+                    writer.write("A target ")
+                    writer.flush()
+                    writer.write("says what? ")
+                    writer.flush()
+                    writer.write(req.readBodyAsString())
+                }
             }
             .start()
 
@@ -307,29 +313,29 @@ class InterceptingForwardProxyTest {
                     httpVersion: String
                 ) = ConnectionInfoImpl.fromTarget(requestTarget)
 
-                override fun onRequestBodyRawBytes(connection: connection, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     rawRequestBodyBytes.write(array, offset, length)
                 }
 
-                override fun onRequestBodyContentBytes(connection: connection, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     contentRequestBodyBytes.write(array, offset, length)
                 }
 
-                override fun onRequestEnded(connection: connection, request: HttpRequest) {
+                override fun onRequestEnded(connection: ConnectionInfo, request: HttpRequest) {
                     requestBodyContents.add(contentRequestBodyBytes.toString(StandardCharsets.UTF_8))
                     contentRequestBodyBytes.reset()
                 }
 
 
-                override fun onResponseBodyRawBytes(connection: connection, request: HttpRequest, response: com.danielflower.ifp.HttpResponse, array: ByteArray, offset: Int, length: Int) {
+                override fun onResponseBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse, array: ByteArray, offset: Int, length: Int) {
                     rawResponseBodyBytes.write(array, offset, length)
                 }
 
-                override fun onResponseBodyContentBytes(connection: connection, request: HttpRequest, response: com.danielflower.ifp.HttpResponse, array: ByteArray, offset: Int, length: Int) {
+                override fun onResponseBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse, array: ByteArray, offset: Int, length: Int) {
                     contentResponseBodyBytes.write(array, offset, length)
                 }
 
-                override fun onResponseEnded(connection: connection, request: HttpRequest, response: com.danielflower.ifp.HttpResponse) {
+                override fun onResponseEnded(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse) {
                     responseBodyContents.add(contentResponseBodyBytes.toString(StandardCharsets.UTF_8))
                     contentResponseBodyBytes.reset()
                 }
@@ -505,16 +511,16 @@ class InterceptingForwardProxyTest {
                     httpVersion: String
                 ) = ConnectionInfoImpl.fromTarget(requestTarget)
 
-                override fun onRequestHeadersReady(connection: connection, request: HttpRequest) {
+                override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     actual.append("websocket? ${request.isWebsocketUpgrade()}\n")
                 }
 
-                override fun onRequestBodyRawBytes(connection: connection, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
                     onSendBytesCount.incrementAndGet()
                 }
 
                 override fun onConnectionEnded(
-                    connection: connection,
+                    connection: ConnectionInfo,
                     clientToTargetException: Exception?,
                     targetToClientException: Exception?
                 ) {
@@ -574,10 +580,10 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(connection.requestTargetToSocketAddress(requestTarget), serverSslContext)
+                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
 
                 override fun onConnectionEnded(
-                    connection: connection,
+                    connection: ConnectionInfo,
                     clientToTargetException: Exception?,
                     targetToClientException: Exception?
                 ) {
@@ -645,11 +651,11 @@ class InterceptingForwardProxyTest {
         data class ConnectionInfoImpl(
             val targetAddress: InetSocketAddress,
             val sslContext: SSLContext,
-        ) : connection {
+        ) : ConnectionInfo {
             override fun sslContext() = sslContext
             override fun targetAddress() = targetAddress
             companion object {
-                fun fromTarget(target: String) = ConnectionInfoImpl(connection.requestTargetToSocketAddress(target), serverSslContext)
+                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(target), serverSslContext)
 
             }
         }

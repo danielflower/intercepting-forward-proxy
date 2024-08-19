@@ -24,17 +24,17 @@ private const val ZERO = 48.toByte()
 private const val NINE = 57.toByte()
 
 internal interface HttpMessageListener {
-    fun onHeaders(connectionInfo: connection, exchange: HttpMessage)
+    fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage)
 
-    fun onRawBytes(connection: connection, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
+    fun onRawBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
 
-    fun onContentBytes(connection: connection, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
+    fun onContentBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int)
 
-    fun onMessageEnded(connectionInfo: connection, exchange: HttpMessage)
-    fun onError(connectionInfo: connection, exchange: HttpMessage, error: Exception)
+    fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage)
+    fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception)
 }
 
-internal class Http1MessageParser(private val connectionInfo: connection, type: HttpMessageType, private val requestQueue: Queue<HttpRequest>) {
+internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, type: HttpMessageType, private val requestQueue: Queue<HttpRequest>) {
 
     private var remainingBytesToProxy: Long = 0L
     private var state : ParseState
