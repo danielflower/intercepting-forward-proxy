@@ -13,6 +13,7 @@ data class HttpHeaders(
     internal fun hasChunkedBody() = hasHeaderValue("transfer-encoding", "chunked")
     fun contentLength(): Long? = header("content-length")?.toLongOrNull()
     fun header(name: String): String? = headers.firstOrNull { it.first == name }?.second
+    fun all() : List<Pair<String,String>> = headers
     fun getAll(name: String): List<String> = headers.filter { it.first == name }.map { it.second }
     fun hasHeader(name: String) = headers.any { it.first == name }
     fun addHeader(name: String, value: String) {
@@ -32,6 +33,45 @@ data class HttpHeaders(
             out.write(CRLF)
         }
     }
+
+    /**
+     * Returns a string representation of the headers.
+     *
+     * **Note:** The following headers will have their actual values replaced with the string `(hidden)`
+     * in order to protect potentially sensitive information: `authorization`, `cookie` and `set-cookie`.
+     *
+     * If you wish to print all values or customize the header values that are hidden, use [toString(Collection<String>)]
+     * @return a string representation of these headers
+     */
+    override fun toString(): String = toString(null)
+
+    /**
+     * Returns a string representation of the headers with selected header values replaced with the string `(hidden)`.
+     *
+     * This may be useful where headers are logged for diagnostic purposes while not revealing values that are held in
+     * potentially sensitive headers.
+     * @param toSuppress A collection of case-insensitive header names which will not have their values printed.
+     * Pass an empty collection to print all header values. A `null` value will hide
+     * the header values as defined on [toString].
+     * @return a string representation of these headers
+     */
+    fun toString(toSuppress: Collection<String>?): String {
+        val suppress = toSuppress ?: setOf("authorization", "cookie", "set-cookie")
+        val sb = StringBuilder("HttpHeaders[")
+        var first = true
+        for (header in headers) {
+            if (!first) sb.append(", ")
+            val name = header.first
+            val suppress = suppress.any { it.equals(name, ignoreCase = true) }
+            val value = if (suppress) "(hidden)" else header.second
+            sb.append(name).append(": ").append(value)
+            first = false
+        }
+        sb.append("]")
+        return sb.toString()
+    }
+
+
     companion object {
         internal fun String.headerBytes() = this.toByteArray(StandardCharsets.US_ASCII)
     }

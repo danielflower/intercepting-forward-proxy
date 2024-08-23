@@ -1,10 +1,23 @@
 package com.danielflower.ifp
 
 import com.danielflower.ifp.Http1MessageParser.Companion.isTChar
+import com.danielflower.ifp.HttpHeaders.Companion.headerBytes
 import org.hamcrest.MatcherAssert
+import org.hamcrest.MatcherAssert.assertThat
 import org.hamcrest.Matchers
+import org.hamcrest.Matchers.contains
+import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
+import java.io.ByteArrayOutputStream
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentLinkedQueue
+import javax.net.ssl.SSLContext
 
+@OptIn(ExperimentalStdlibApi::class)
 class Http1MessageParserTest {
     @Test
     fun tcharsAreValid() {
@@ -34,4 +47,179 @@ class Http1MessageParserTest {
             MatcherAssert.assertThat(i.toByte().isTChar(), Matchers.equalTo(false))
         }
     }
+
+    @ParameterizedTest
+    @ValueSource(ints = [0, 100])
+    fun `chunked bodies where whole body in single buffer is fine`(bufferOffset: Int) {
+        val parser = Http1MessageParser(DummyConnectionInfo(), HttpMessageType.REQUEST, ConcurrentLinkedQueue())
+        val request = StringBuilder(" ".repeat(bufferOffset))
+        request.append("""
+            GET /blah HTTP/1.1\r
+            content-type: text/plain;charset=utf-8\r
+            transfer-encoding: chunked\r
+            some-header1: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header2: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header3: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header4: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header5: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header6: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header7: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            \r
+            
+        """.trimIndent().replace("\\r", "\r"))
+
+        val chunk = "!".repeat(7429)
+        val chunkSizeHex = chunk.toByteArray().size.toHexString(HexFormat.UpperCase)
+        request.append(chunkSizeHex).append("\r\n").append(chunk).append("\r\n0\r\n\r\n")
+
+        val bytes = request.toString().headerBytes()
+
+        val actual = mutableListOf<String>()
+
+        parser.feed(bytes, bufferOffset, bytes.size - bufferOffset, object : HttpMessageListener {
+            override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                val req = exchange as HttpRequest
+                actual.add("Got request ${req.method} ${req.url} ${req.httpVersion} with ${exchange.headers().all().size} headers and body size ${req.bodyTransferSize()}")
+            }
+
+            override fun onRawBytes(
+                connection: ConnectionInfo,
+                exchange: HttpMessage,
+                array: ByteArray,
+                offset: Int,
+                length: Int
+            ) {
+                actual.add("Received raw bytes: off=$offset len=$length")
+            }
+
+            override fun onContentBytes(
+                connection: ConnectionInfo,
+                exchange: HttpMessage,
+                array: ByteArray,
+                offset: Int,
+                length: Int
+            ) {
+                val content = String(array, offset, length)
+                if (content != chunk) {
+                    actual.add("Received content bytes: off=$offset len=$length with invalid content: $content")
+                } else {
+                    actual.add("Received content bytes: off=$offset len=$length")
+                }
+            }
+
+            override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                actual.add("Message ended")
+            }
+
+            override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) {
+                actual.add("Error: $error")
+            }
+
+        })
+
+        assertThat("Events:\n\t" + actual.joinToString("\n\t"), actual, contains(
+            "Got request GET /blah HTTP/1.1 with 9 headers and body size BodySize(type=CHUNKED, bytes=null)",
+                "Received raw bytes: off=${811+bufferOffset} len=7441",
+                "Received content bytes: off=${821+bufferOffset} len=7429",
+                "Received raw bytes: off=${8252+bufferOffset} len=3",
+                "Received raw bytes: off=${8255+bufferOffset} len=2",
+                "Message ended",
+        ))
+    }
+
+    // TODO: test when a data chunk spans multiple buffers
+
+    @Test
+    fun `chunked bodies where chunk goes over byte buffer edge are fine`() {
+        val parser = Http1MessageParser(DummyConnectionInfo(), HttpMessageType.REQUEST, ConcurrentLinkedQueue())
+        val request = StringBuilder("""
+            GET /blah HTTP/1.1\r
+            content-type: text/plain;charset=utf-8\r
+            transfer-encoding: chunked\r
+            some-header1: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header2: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header3: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header4: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header5: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header6: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            some-header7: some-value some-value some-value some-value some-value some-value some-value some-value\r
+            \r
+            
+        """.trimIndent().replace("\\r", "\r"))
+
+        val chunk = "!".repeat(7429)
+        val chunkSizeHex = chunk.toByteArray().size.toHexString(HexFormat.UpperCase)
+        request.append(chunkSizeHex).append("\r\n").append(chunk).append("\r\n0\r\n\r\n")
+
+        val wholeMessage = request.toString().headerBytes()
+        val firstMessage = ByteArray(8192)
+        wholeMessage.copyInto(firstMessage, 0, 0, firstMessage.size)
+
+        val secondMessage = ByteArray((wholeMessage.size - firstMessage.size) + 1000) // offsetting by a thousand just to test offsets are fine
+        wholeMessage.copyInto(secondMessage, 1000, firstMessage.size, wholeMessage.size)
+
+
+
+        val receivedContent = ByteArrayOutputStream()
+
+        val actual = mutableListOf<String>()
+
+
+        val listener = object : HttpMessageListener {
+            override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                val req = exchange as HttpRequest
+                actual.add(
+                    "Got request ${req.method} ${req.url} ${req.httpVersion} with ${
+                        exchange.headers().all().size
+                    } headers and body size ${req.bodyTransferSize()}"
+                )
+            }
+
+            override fun onRawBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int) {
+                actual.add("Received raw bytes: off=$offset len=$length")
+            }
+
+            override fun onContentBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int) {
+                receivedContent.write(array, offset, length)
+                actual.add("Received content bytes: off=$offset len=$length")
+            }
+
+            override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                actual.add("Message ended")
+            }
+
+            override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) {
+                actual.add("Error: $error")
+            }
+
+        }
+        parser.feed(firstMessage, 0, firstMessage.size, listener)
+        parser.feed(secondMessage, 1000, secondMessage.size - 1000, listener)
+
+        assertThat(receivedContent.toByteArray().toString(StandardCharsets.UTF_8), equalTo(chunk))
+
+        assertThat("Events:\n\t" + actual.joinToString("\n\t"), actual, contains(
+            "Got request GET /blah HTTP/1.1 with 9 headers and body size BodySize(type=CHUNKED, bytes=null)",
+            "Received raw bytes: off=811 len=7381",
+            "Received content bytes: off=821 len=7371",
+            "Received raw bytes: off=1000 len=60",
+            "Received content bytes: off=1000 len=58",
+            "Received raw bytes: off=1060 len=3",
+            "Received raw bytes: off=1063 len=2",
+            "Message ended",
+        ))
+    }
+
+
+    private class DummyConnectionInfo : ConnectionInfo {
+        override fun sslContext(): SSLContext {
+            TODO("Not yet implemented")
+        }
+
+        override fun targetAddress(): InetSocketAddress {
+            TODO("Not yet implemented")
+        }
+
+    }
+
 }

@@ -200,14 +200,14 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.FIXED_SIZE_BODY -> {
-                    val numberSent = sendBytes(listener, bytes, offset, length, i, offset, length)
+                    val numberSent = sendBytes(listener, bytes, offset, length, i, i, remainingBytesToProxy)
                     i += numberSent - 1 // subtracting one because there is an i++ below
                     if (remainingBytesToProxy == 0L) {
                         onMessageEnded(listener)
                     }
                 }
                 ParseState.UNSPECIFIED_BODY -> {
-                    val numberSent = sendBytes(listener, bytes, offset, length, i, offset, length)
+                    val numberSent = sendBytes(listener, bytes, offset, length, i, i, remainingBytesToProxy)
                     i += numberSent - 1 // subtracting one because there is an i++ below
                 }
                 ParseState.CHUNK_START -> {
@@ -235,7 +235,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                 }
                 ParseState.CHUNK_HEADER_ENDING -> {
                     if (b.isLF()) {
-                        val chunkDataSize = buffer.consume().toInt(16)
+                        val chunkDataSize = buffer.consume().toLong(16)
                         val consumeTrailingCRLF = chunkDataSize > 0
 
                         // Well, this is complicated. Basically we have been skipping over the chunk metadata. Now we want
@@ -247,13 +247,11 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                         // written everything that was remaining already).
                         val start = copyFrom!!
                         val chunkHeaderLen = i - start + 1
-                        remainingBytesToProxy = (chunkDataSize + chunkHeaderLen + (if (consumeTrailingCRLF) 2 else 0)).toLong()
+                        remainingBytesToProxy = chunkDataSize + chunkHeaderLen + (if (consumeTrailingCRLF) 2 else 0)
                         i = maxOf(0, i - chunkHeaderLen + 1)
-                        val contentOffset = offset + chunkHeaderLen
-                        val contentLength = minOf(chunkDataSize, length - contentOffset)
-                        val written = sendBytes(listener, bytes, offset, length, i, contentOffset, contentLength)
+                        val written = sendBytes(listener, bytes, offset, length, i, i + chunkHeaderLen, chunkDataSize)
                         i += written
-                        state = if (remainingBytesToProxy == 0L && chunkDataSize == 0) {
+                        state = if (remainingBytesToProxy == 0L && chunkDataSize == 0L) {
                             i--
                             ParseState.LAST_CHUNK
                         } else if (remainingBytesToProxy == 0L) {
@@ -266,7 +264,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.CHUNK_DATA -> {
-                    val numberSent = sendBytes(listener, bytes, offset, length, i, offset, minOf(length, remainingBytesToProxy.toInt() - 2))
+                    val numberSent = sendBytes(listener, bytes, offset, length, i, i, remainingBytesToProxy - 2)
                     i += numberSent - 1 // subtracting one because there is an i++ below
                     if (remainingBytesToProxy == 0L) {
                         state = ParseState.CHUNK_START
@@ -282,7 +280,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                 }
                 ParseState.CHUNKED_BODY_ENDING -> {
                     if (b.isLF()) {
-                        listener.onRawBytes(connectionInfo, exchange, CRLF, 0, 2)
+                        listener.onRawBytes(connectionInfo, exchange, CRLF, i-1, 2)
                         onMessageEnded(listener)
                     } else throw ParseException("state=$state b=$b", i)
                 }
@@ -333,15 +331,18 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
     private fun request() = (exchange as HttpRequest)
     private fun response() = (exchange as HttpResponse)
 
-    private fun sendBytes(listener: HttpMessageListener, bytes: ByteArray, offset: Int, length: Int, i: Int, contentOffset: Int, contentLength: Int): Int {
-        val numberToSendNow = minOf(remainingBytesToProxy, (length - i).toLong()).toInt()
+    private fun sendBytes(listener: HttpMessageListener, bytes: ByteArray, originalOffset: Int, originalLength: Int, currentIndex: Int, contentStartIndex: Int, contentLength: Long): Int {
+        val remainingInBuffer = originalLength - (currentIndex - originalOffset)
+        val numberToTransfer = minOf(remainingBytesToProxy, remainingInBuffer.toLong()).toInt()
         val exc = exchange
-        listener.onRawBytes(connectionInfo, exc, bytes, offset + i, numberToSendNow)
+        listener.onRawBytes(connectionInfo, exc, bytes, currentIndex, numberToTransfer)
         if (contentLength > 0) {
-            listener.onContentBytes(connectionInfo, exc, bytes, contentOffset + i, minOf(numberToSendNow, contentLength))
+            val remainingContentInBuffer = originalLength - (contentStartIndex - originalOffset)
+            val contentToTransfer = minOf(remainingContentInBuffer.toLong(), contentLength).toInt()
+            listener.onContentBytes(connectionInfo, exc, bytes, contentStartIndex, contentToTransfer)
         }
-        remainingBytesToProxy -= numberToSendNow
-        return numberToSendNow
+        remainingBytesToProxy -= numberToTransfer
+        return numberToTransfer
     }
 
     private fun onMessageEnded(listener: HttpMessageListener) {
