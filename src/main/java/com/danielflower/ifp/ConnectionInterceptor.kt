@@ -43,23 +43,12 @@ interface ConnectionInterceptor {
     fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {}
 
     /**
-     * Called before request body content bytes are being sent to the target server.
-     *
-     * Unlike [#onRequestBodyRawBytes] no transfer encoding data (such as chunk metadata) is included.
-     * Use to inspect the actual content body of requests.
-     *
-     * Note: websocket frames are not included.
-     */
-    fun onRequestBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
-
-    /**
      * Called before request body bytes are being sent to the target server.
      *
-     * Note this is raw data, e.g. it may contain HTTP chunked encoding markers, and trailers.
-     *
-     * Note that websocket frames will are also included.
+     * This includes all possible data in a request body, e.g. the content bytes and chunked encoding markers. If you wish
+     * to just inspect the content of a request, then check that [type] is [BodyBytesType.CONTENT].
      */
-    fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {}
+    fun onRequestBodyBytes(connection: ConnectionInfo, request: HttpRequest, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {}
 
     /**
      * Called when an HTTP request message has ended (this does not imply anything about the response which will usually
@@ -82,24 +71,20 @@ interface ConnectionInterceptor {
         targetToClientException: Exception?
     ) {}
 
+    /**
+     * Called before the response headers are sent back to the client.
+     *
+     * This callback can alter the values in the [response] parameter to modify the response status code and headers.
+     */
     fun onResponseHeadersReady(connection: ConnectionInfo, request: HttpRequest, response: HttpResponse) {}
-    fun onResponseBodyRawBytes(
-        connection: ConnectionInfo,
-        request: HttpRequest,
-        response: HttpResponse,
-        array: ByteArray,
-        offset: Int,
-        length: Int
-    ) {}
 
-    fun onResponseBodyContentBytes(
-        connection: ConnectionInfo,
-        request: HttpRequest,
-        response: HttpResponse,
-        array: ByteArray,
-        offset: Int,
-        length: Int
-    ) {}
+    /**
+     * Called before response body bytes are being sent back to the client.
+     *
+     * This includes all possible data in a response body, e.g. the content bytes and chunked encoding markers. If you wish
+     * to just inspect the content of a request, then check that [type] is [BodyBytesType.CONTENT].
+     */
+    fun onResponseBodyBytes(connection: ConnectionInfo, request: HttpRequest, response: HttpResponse, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {}
 
     /**
      * Called after a response has ended.

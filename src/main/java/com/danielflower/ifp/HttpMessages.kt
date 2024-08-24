@@ -3,6 +3,7 @@ package com.danielflower.ifp
 import com.danielflower.ifp.HttpHeaders.Companion.headerBytes
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.util.*
 
 data class HttpHeaders(
     /**
@@ -19,6 +20,7 @@ data class HttpHeaders(
     fun addHeader(name: String, value: String) {
         headers.addLast(Pair(name, value))
     }
+    fun size() = headers.size
     fun setHeader(name: String, value: String) {
         headers.removeAll { it.first == name }
         addHeader(name, value)
@@ -74,6 +76,28 @@ data class HttpHeaders(
 
     companion object {
         internal fun String.headerBytes() = this.toByteArray(StandardCharsets.US_ASCII)
+
+        @JvmStatic
+        fun parse(headerBytes: ByteArray) = parse(headerBytes, 0, headerBytes.size)
+        @JvmStatic
+        fun parse(headerBytes: ByteArray, offset: Int, length: Int): HttpHeaders {
+            val parser = Http1MessageParser(DummyConnectionInfo, HttpMessageType.REQUEST, LinkedList())
+            val requestLine = "GET / HTTP/1.1\r\n".headerBytes()
+            var headers : HttpHeaders? = null
+            val listener = object : HttpMessageListener {
+                override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                    headers = exchange.headers()
+                }
+                override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) = throw NotImplementedError()
+                override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) = Unit
+                override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) = throw IllegalArgumentException("headerBytes contains invalid headers", error)
+            }
+            parser.feed(requestLine, 0, requestLine.size, listener)
+            parser.feed(headerBytes, offset, length, listener)
+
+            return headers ?: throw IllegalArgumentException("headerBytes did not contain headers")
+        }
+
     }
 
 }

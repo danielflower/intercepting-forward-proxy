@@ -55,15 +55,10 @@ public class MyForwardProxy {
             }
 
             @Override
-            public void onRequestBodyRawBytes(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
-                System.out.println("Going to send " + length + " bytes to the target");
-            }
-
-            @Override
-            public void onRequestBodyContentBytes(ConnectionInfo connection, HttpRequest request, byte[] array, int offset, int length) {
-                // This differs from the raw version in that chunked request bodies will not have chunk metedata
-                // and trailer data sent to this method. This is the method to use if the content body of a request
-                // needs inspecting.
+            public void onRequestBodyBytes(ConnectionInfo connection, HttpRequest request, BodyBytesType type, byte[] array, int offset, int length) {
+                // This includes all bytes of a request body, including things like chunked encoding markings. To inspect only
+                // the actual body content, only bytes where the type parameter is BodyBytesType.CONTENT can be used.
+                System.out.println("Going to send " + length + " bytes of type " + type + " to the target");
             }
 
             @Override
@@ -77,13 +72,10 @@ public class MyForwardProxy {
             }
 
             @Override
-            public void onResponseBodyRawBytes(ConnectionInfo connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
-                System.out.println("Response bytes transferring: " + length);
-            }
-
-            @Override
-            public void onResponseBodyContentBytes(ConnectionInfo connection, HttpRequest request, HttpResponse response, byte[] array, int offset, int length) {
-                System.out.println("Response content length " + length);
+            public void onResponseBodyBytes(ConnectionInfo connection, HttpRequest request, HttpResponse response, BodyBytesType type, byte[] array, int offset, int length) {
+                // This includes all bytes of a response body, including things like chunked encoding markings. To inspect only
+                // the actual body content, only bytes where the type parameter is BodyBytesType.CONTENT can be used.
+                System.out.println("Response bytes of type " + type + " sending to client: " + length);
             }
 
             @Override

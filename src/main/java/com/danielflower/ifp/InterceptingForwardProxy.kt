@@ -190,25 +190,9 @@ class InterceptingForwardProxy private constructor(
                 request.writeTo(out)
             }
 
-            override fun onRawBytes(
-                connection: ConnectionInfo,
-                exchange: HttpMessage,
-                array: ByteArray,
-                offset: Int,
-                length: Int
-            ) {
-                listener.onRequestBodyRawBytes(connection, exchange as HttpRequest, array, offset, length)
+            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
+                listener.onRequestBodyBytes(connection, exchange as HttpRequest, type, array, offset, length)
                 out.write(array, offset, length)
-            }
-
-            override fun onContentBytes(
-                connection: ConnectionInfo,
-                exchange: HttpMessage,
-                array: ByteArray,
-                offset: Int,
-                length: Int
-            ) {
-                listener.onRequestBodyContentBytes(connection, exchange as HttpRequest, array, offset, length)
             }
 
             override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
@@ -216,7 +200,10 @@ class InterceptingForwardProxy private constructor(
             }
 
             override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) {
-                listener.onRequestError(connectionInfo, exchange as HttpRequest, error)
+                val req = exchange as HttpRequest
+                if (req.headers().size() > 0) {
+                    listener.onRequestError(connectionInfo, req, error)
+                }
             }
         }
 
@@ -236,15 +223,10 @@ class InterceptingForwardProxy private constructor(
                 resp.writeTo(out)
             }
 
-            override fun onRawBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int) {
+            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                 val resp = exchange as HttpResponse
-                listener.onResponseBodyRawBytes(connection, resp.request!!, resp, array, offset, length)
+                listener.onResponseBodyBytes(connection, resp.request!!, resp, type, array, offset, length)
                 out.write(array, offset, length)
-            }
-
-            override fun onContentBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int) {
-                val resp = exchange as HttpResponse
-                listener.onResponseBodyContentBytes(connection, resp.request!!, resp, array, offset, length)
             }
 
             override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
@@ -270,6 +252,8 @@ class InterceptingForwardProxy private constructor(
                 parser.feed(buffer, 0, bytesRead, parserListener)
                 destination.flush()
             }
+            parser.eof(parserListener)
+        } catch (e: EOFException) {
             parser.eof(parserListener)
         } catch (e: Exception) {
             parser.error(e, parserListener)
@@ -374,3 +358,7 @@ interface ConnectionInfo {
     }
 }
 
+internal object DummyConnectionInfo : ConnectionInfo {
+    override fun sslContext(): SSLContext = throw NotImplementedError()
+    override fun targetAddress(): InetSocketAddress = throw NotImplementedError()
+}

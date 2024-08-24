@@ -46,26 +46,17 @@ class InterceptingForwardProxyTest {
         try {
             val listener = object : ConnectionInterceptor {
 
-                override fun acceptConnection(
-                    clientSocket: Socket,
-                    method: String,
-                    requestTarget: String,
-                    httpVersion: String
-                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
+                override fun acceptConnection(clientSocket: Socket, method: String, requestTarget: String, httpVersion: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     request.headers().addHeader("added-by-interceptor", "it was")
                 }
 
-                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyBytes(connection: ConnectionInfo, request: HttpRequest, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                     Assertions.assertTrue(false, "Should not be any bytes to proxy")
                 }
 
-                override fun onResponseEnded(
-                    connection: ConnectionInfo,
-                    httpRequest: HttpRequest,
-                    response: com.danielflower.ifp.HttpResponse
-                ) {}
+                override fun onResponseEnded(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse) {}
             }
 
             InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
@@ -313,12 +304,11 @@ class InterceptingForwardProxyTest {
                     httpVersion: String
                 ) = ConnectionInfoImpl.fromTarget(requestTarget)
 
-                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyBytes(connection: ConnectionInfo, request: HttpRequest, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                     rawRequestBodyBytes.write(array, offset, length)
-                }
-
-                override fun onRequestBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
-                    contentRequestBodyBytes.write(array, offset, length)
+                    if (type == BodyBytesType.CONTENT) {
+                        contentRequestBodyBytes.write(array, offset, length)
+                    }
                 }
 
                 override fun onRequestEnded(connection: ConnectionInfo, request: HttpRequest) {
@@ -326,13 +316,11 @@ class InterceptingForwardProxyTest {
                     contentRequestBodyBytes.reset()
                 }
 
-
-                override fun onResponseBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse, array: ByteArray, offset: Int, length: Int) {
+                override fun onResponseBodyBytes(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                     rawResponseBodyBytes.write(array, offset, length)
-                }
-
-                override fun onResponseBodyContentBytes(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse, array: ByteArray, offset: Int, length: Int) {
-                    contentResponseBodyBytes.write(array, offset, length)
+                    if (type == BodyBytesType.CONTENT) {
+                        contentResponseBodyBytes.write(array, offset, length)
+                    }
                 }
 
                 override fun onResponseEnded(connection: ConnectionInfo, request: HttpRequest, response: com.danielflower.ifp.HttpResponse) {
@@ -494,6 +482,7 @@ class InterceptingForwardProxyTest {
                             val text = buffer.toByteString().string(StandardCharsets.UTF_8)
                             session().sendText(text, onComplete)
                         }
+
                     }
                 }
             )
@@ -515,15 +504,11 @@ class InterceptingForwardProxyTest {
                     actual.append("websocket? ${request.isWebsocketUpgrade()}\n")
                 }
 
-                override fun onRequestBodyRawBytes(connection: ConnectionInfo, request: HttpRequest, array: ByteArray, offset: Int, length: Int) {
+                override fun onRequestBodyBytes(connection: ConnectionInfo, request: HttpRequest, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                     onSendBytesCount.incrementAndGet()
                 }
 
-                override fun onConnectionEnded(
-                    connection: ConnectionInfo,
-                    clientToTargetException: Exception?,
-                    targetToClientException: Exception?
-                ) {
+                override fun onConnectionEnded(connection: ConnectionInfo, clientToTargetException: Exception?, targetToClientException: Exception?) {
                     clientToTargetException?.printStackTrace()
                     targetToClientException?.printStackTrace()
                 }
@@ -535,17 +520,17 @@ class InterceptingForwardProxyTest {
                 val client = okHttpClient(proxy)
                 val wssUrl = target.uri().toString().replaceFirst("http", "ws") + "/somepath/"
                 val req = Request.Builder().url(wssUrl).build()
-                val newWebSocket = client.newWebSocket(req, object : WebSocketListener() {
+                val clientWebSocket = client.newWebSocket(req, object : WebSocketListener() {
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         actual.append("Got back $text\n")
                         messagesReceivedLatch.countDown()
                     }
                 })
-                newWebSocket.send("Well hello there, ")
-                newWebSocket.send("world")
-                newWebSocket.send(bigText.encodeUtf8())
+                clientWebSocket.send("Well hello there, ")
+                clientWebSocket.send("world")
+                clientWebSocket.send(bigText.encodeUtf8())
                 assertThat(messagesReceivedLatch.await(120, TimeUnit.SECONDS), equalTo(true))
-                newWebSocket.close(1000, "Finished")
+                clientWebSocket.close(1000, "Finished")
             }
         } finally {
             target.stop()

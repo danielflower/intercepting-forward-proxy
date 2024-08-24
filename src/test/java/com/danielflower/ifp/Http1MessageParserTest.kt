@@ -82,28 +82,13 @@ class Http1MessageParserTest {
                 actual.add("Got request ${req.method} ${req.url} ${req.httpVersion} with ${exchange.headers().all().size} headers and body size ${req.bodyTransferSize()}")
             }
 
-            override fun onRawBytes(
-                connection: ConnectionInfo,
-                exchange: HttpMessage,
-                array: ByteArray,
-                offset: Int,
-                length: Int
-            ) {
-                actual.add("Received raw bytes: off=$offset len=$length")
-            }
-
-            override fun onContentBytes(
-                connection: ConnectionInfo,
-                exchange: HttpMessage,
-                array: ByteArray,
-                offset: Int,
-                length: Int
-            ) {
-                val content = String(array, offset, length)
-                if (content != chunk) {
-                    actual.add("Received content bytes: off=$offset len=$length with invalid content: $content")
-                } else {
-                    actual.add("Received content bytes: off=$offset len=$length")
+            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
+                actual.add("Received $type bytes: off=$offset len=$length")
+                if (type == BodyBytesType.CONTENT) {
+                    val content = String(array, offset, length)
+                    if (content != chunk) {
+                        actual.add("Received content bytes: off=$offset len=$length with invalid content: $content")
+                    }
                 }
             }
 
@@ -119,15 +104,14 @@ class Http1MessageParserTest {
 
         assertThat("Events:\n\t" + actual.joinToString("\n\t"), actual, contains(
             "Got request GET /blah HTTP/1.1 with 9 headers and body size BodySize(type=CHUNKED, bytes=null)",
-                "Received raw bytes: off=${811+bufferOffset} len=7441",
-                "Received content bytes: off=${821+bufferOffset} len=7429",
-                "Received raw bytes: off=${8252+bufferOffset} len=3",
-                "Received raw bytes: off=${8255+bufferOffset} len=2",
+                "Received ENCODING bytes: off=${811+bufferOffset} len=10",
+                "Received CONTENT bytes: off=${821+bufferOffset} len=7429",
+                "Received ENCODING bytes: off=0 len=2", // this is from a CRLF buffer
+                "Received ENCODING bytes: off=${8252+bufferOffset} len=3",
+                "Received ENCODING bytes: off=0 len=2", // this is from a CRLF buffer
                 "Message ended",
         ))
     }
-
-    // TODO: test when a data chunk spans multiple buffers
 
     @Test
     fun `chunked bodies where chunk goes over byte buffer edge are fine`() {
@@ -175,13 +159,11 @@ class Http1MessageParserTest {
                 )
             }
 
-            override fun onRawBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int) {
-                actual.add("Received raw bytes: off=$offset len=$length")
-            }
-
-            override fun onContentBytes(connection: ConnectionInfo, exchange: HttpMessage, array: ByteArray, offset: Int, length: Int) {
-                receivedContent.write(array, offset, length)
-                actual.add("Received content bytes: off=$offset len=$length")
+            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
+                actual.add("Received $type bytes: off=$offset len=$length")
+                if (type == BodyBytesType.CONTENT) {
+                    receivedContent.write(array, offset, length)
+                }
             }
 
             override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
@@ -200,15 +182,88 @@ class Http1MessageParserTest {
 
         assertThat("Events:\n\t" + actual.joinToString("\n\t"), actual, contains(
             "Got request GET /blah HTTP/1.1 with 9 headers and body size BodySize(type=CHUNKED, bytes=null)",
-            "Received raw bytes: off=811 len=7381",
-            "Received content bytes: off=821 len=7371",
-            "Received raw bytes: off=1000 len=60",
-            "Received content bytes: off=1000 len=58",
-            "Received raw bytes: off=1060 len=3",
-            "Received raw bytes: off=1063 len=2",
+            "Received ENCODING bytes: off=811 len=10",
+            "Received CONTENT bytes: off=821 len=7371",
+            "Received CONTENT bytes: off=1000 len=58",
+            "Received ENCODING bytes: off=0 len=2",
+            "Received ENCODING bytes: off=1060 len=3",
+            "Received ENCODING bytes: off=0 len=2",
             "Message ended",
         ))
     }
+
+    @ParameterizedTest
+    @ValueSource(ints = [1, 2, 3, 11, 20, 1000])
+    fun `chunked bodies can span multiple chunks`(bytesPerFeed: Int) {
+        val parser = Http1MessageParser(DummyConnectionInfo(), HttpMessageType.REQUEST, ConcurrentLinkedQueue())
+        val request = StringBuilder("""
+            GET /blah HTTP/1.1\r
+            content-type: text/plain;charset=utf-8\r
+            transfer-encoding: chunked\r
+            \r
+            
+        """.trimIndent().replace("\\r", "\r"))
+
+        val chunk = "Hello world there oh yes"
+        val chunkSizeHex = chunk.toByteArray().size.toHexString(HexFormat.UpperCase)
+        request.append(chunkSizeHex).append(";chunkmetadata=blah;another=value\r\n").append(chunk).append("\r\n0\r\ntrailer: hello\r\n\r\n")
+
+        val wholeMessage = request.toString().headerBytes()
+        val receivedContent = ByteArrayOutputStream()
+        val receivedBytes = ByteArrayOutputStream()
+        val receivedTrailers = ByteArrayOutputStream()
+
+        val actual = mutableListOf<String>()
+
+
+        val listener = object : HttpMessageListener {
+            override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                val req = exchange as HttpRequest
+                actual.add(
+                    "Got request ${req.method} ${req.url} ${req.httpVersion} with ${
+                        exchange.headers().all().size
+                    } headers and body size ${req.bodyTransferSize()}"
+                )
+                req.writeTo(receivedBytes)
+            }
+
+            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
+                receivedBytes.write(array, offset, length)
+                if (type == BodyBytesType.CONTENT) {
+                    receivedContent.write(array, offset, length)
+                } else if (type == BodyBytesType.TRAILERS) {
+                    receivedTrailers.write(array, offset, length)
+                }
+            }
+
+            override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                actual.add("Message ended")
+            }
+
+            override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) {
+                actual.add("Error: $error")
+            }
+
+        }
+
+        for (i in wholeMessage.indices step bytesPerFeed) {
+            val length = minOf(bytesPerFeed, wholeMessage.size - i)
+            parser.feed(wholeMessage, i, length, listener)
+        }
+
+        assertThat(receivedContent.toByteArray().toString(StandardCharsets.UTF_8), equalTo(chunk))
+        assertThat(receivedBytes.toByteArray().toString(StandardCharsets.UTF_8), equalTo(request.toString()))
+
+        assertThat("Events:\n\t" + actual.joinToString("\n\t"), actual, contains(
+            "Got request GET /blah HTTP/1.1 with 2 headers and body size BodySize(type=CHUNKED, bytes=null)",
+            "Message ended",
+        ))
+
+        val trailers = HttpHeaders.parse(receivedTrailers.toByteArray())
+        assertThat(trailers.size(), equalTo(1))
+        assertThat(trailers.getAll("trailer"), contains("hello"))
+    }
+
 
 
     private class DummyConnectionInfo : ConnectionInfo {
