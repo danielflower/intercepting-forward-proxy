@@ -81,16 +81,16 @@ data class HttpHeaders(
         fun parse(headerBytes: ByteArray) = parse(headerBytes, 0, headerBytes.size)
         @JvmStatic
         fun parse(headerBytes: ByteArray, offset: Int, length: Int): HttpHeaders {
-            val parser = Http1MessageParser(DummyConnectionInfo, HttpMessageType.REQUEST, LinkedList())
+            val parser = Http1MessageParser(HttpMessageType.REQUEST, LinkedList())
             val requestLine = "GET / HTTP/1.1\r\n".headerBytes()
             var headers : HttpHeaders? = null
             val listener = object : HttpMessageListener {
-                override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+                override fun onHeaders(exchange: HttpMessage) {
                     headers = exchange.headers()
                 }
-                override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) = throw NotImplementedError()
-                override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) = Unit
-                override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) = throw IllegalArgumentException("headerBytes contains invalid headers", error)
+                override fun onBodyBytes(exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) = throw NotImplementedError()
+                override fun onMessageEnded(exchange: HttpMessage) = Unit
+                override fun onError(exchange: HttpMessage, error: Exception) = throw IllegalArgumentException("headerBytes contains invalid headers", error)
             }
             parser.feed(requestLine, 0, requestLine.size, listener)
             parser.feed(headerBytes, offset, length, listener)

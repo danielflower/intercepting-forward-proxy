@@ -25,10 +25,10 @@ private const val ZERO = 48.toByte()
 private const val NINE = 57.toByte()
 
 internal interface HttpMessageListener {
-    fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage)
-    fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int)
-    fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage)
-    fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception)
+    fun onHeaders(exchange: HttpMessage)
+    fun onBodyBytes(exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int)
+    fun onMessageEnded(exchange: HttpMessage)
+    fun onError(exchange: HttpMessage, error: Exception)
 }
 
 /**
@@ -60,7 +60,7 @@ enum class BodyBytesType {
     WEBSOCKET_FRAME,
 }
 
-internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, type: HttpMessageType, private val requestQueue: Queue<HttpRequest>) {
+internal class Http1MessageParser(type: HttpMessageType, private val requestQueue: Queue<HttpRequest>) {
 
     private var remainingBytesToProxy: Long = 0L
     private var state : ParseState
@@ -220,7 +220,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                             BodyType.NONE -> {}
                         }
 
-                        listener.onHeaders(connectionInfo, exchange)
+                        listener.onHeaders(exchange)
                         if (body.type == BodyType.NONE) {
                             onMessageEnded(listener)
                         }
@@ -267,7 +267,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                     if (b.isLF()) {
                         // send the chunk header
                         val start = copyFrom!!
-                        listener.onBodyBytes(connectionInfo, exchange, BodyBytesType.ENCODING, bytes, start, 1 + i - start)
+                        listener.onBodyBytes(exchange, BodyBytesType.ENCODING, bytes, start, 1 + i - start)
 
                         // remainingBytesToProxy has the chunk size in it
                         state = if (remainingBytesToProxy == 0L) ParseState.LAST_CHUNK else ParseState.CHUNK_DATA
@@ -315,14 +315,14 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
                         if (trailerPart.endsWith("\r\n\r\n")) {
                             buffer.reset()
                             val trailerBytes = trailerPart.toByteArray(StandardCharsets.US_ASCII)
-                            listener.onBodyBytes(connectionInfo, exchange, BodyBytesType.TRAILERS, trailerBytes, 0, trailerBytes.size)
+                            listener.onBodyBytes(exchange, BodyBytesType.TRAILERS, trailerBytes, 0, trailerBytes.size)
                             onMessageEnded(listener)
                         }
                     } else throw ParseException("state=$state b=$b", i)
                 }
                 ParseState.WEBSOCKET -> {
                     val remaining = length - i
-                    listener.onBodyBytes(connectionInfo, exchange, BodyBytesType.WEBSOCKET_FRAME, bytes, i, remaining)
+                    listener.onBodyBytes(exchange, BodyBytesType.WEBSOCKET_FRAME, bytes, i, remaining)
                     i += remaining - 1 // -1 because there is an i++ below
                 }
             }
@@ -335,21 +335,21 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
         if (start != null) {
             val numToCopy = (offset + length) - start
             if (numToCopy > 0) {
-                listener.onBodyBytes(connectionInfo, exchange, BodyBytesType.ENCODING, bytes, start, numToCopy)
+                listener.onBodyBytes(exchange, BodyBytesType.ENCODING, bytes, start, numToCopy)
             }
             // leave copyFrom not null so it gets set to 'offset' on the next feed call
         }
     }
 
     private fun sendCRLF(listener: HttpMessageListener) {
-        listener.onBodyBytes(connectionInfo, exchange, BodyBytesType.ENCODING, CRLF, 0, 2)
+        listener.onBodyBytes(exchange, BodyBytesType.ENCODING, CRLF, 0, 2)
     }
 
     fun eof(listener: HttpMessageListener) {
         if (state.eofAction == EOFAction.COMPLETE) {
-            listener.onMessageEnded(connectionInfo, exchange)
+            listener.onMessageEnded(exchange)
         } else if (state.eofAction == EOFAction.ERROR) {
-            listener.onError(connectionInfo, exchange, EOFException("EOF when state is $state"))
+            listener.onError(exchange, EOFException("EOF when state is $state"))
         }
     }
 
@@ -360,7 +360,7 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
         val remainingInBuffer = originalLength - (currentIndex - originalOffset)
         val numberToTransfer = minOf(remainingBytesToProxy, remainingInBuffer.toLong()).toInt()
         val exc = exchange
-        listener.onBodyBytes(connectionInfo, exc, BodyBytesType.CONTENT, bytes, currentIndex, numberToTransfer)
+        listener.onBodyBytes(exc, BodyBytesType.CONTENT, bytes, currentIndex, numberToTransfer)
         remainingBytesToProxy -= numberToTransfer
         return numberToTransfer
     }
@@ -383,12 +383,12 @@ internal class Http1MessageParser(private val connectionInfo: ConnectionInfo, ty
             }
         }
         if (state != ParseState.WEBSOCKET && !(exc is HttpResponse && exc.statusCode == 100)) {
-            listener.onMessageEnded(connectionInfo, exc)
+            listener.onMessageEnded(exc)
         }
     }
 
     fun error(e: Exception, messageListener: HttpMessageListener) {
-        messageListener.onError(connectionInfo, exchange, e)
+        messageListener.onError(exchange, e)
     }
 
     private enum class ParseState(val eofAction: EOFAction) {

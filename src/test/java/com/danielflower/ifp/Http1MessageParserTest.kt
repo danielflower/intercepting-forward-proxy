@@ -11,11 +11,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayOutputStream
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentLinkedQueue
-import javax.net.ssl.SSLContext
 
 @OptIn(ExperimentalStdlibApi::class)
 class Http1MessageParserTest {
@@ -51,7 +48,7 @@ class Http1MessageParserTest {
     @ParameterizedTest
     @ValueSource(ints = [0, 100])
     fun `chunked bodies where whole body in single buffer is fine`(bufferOffset: Int) {
-        val parser = Http1MessageParser(DummyConnectionInfo(), HttpMessageType.REQUEST, ConcurrentLinkedQueue())
+        val parser = Http1MessageParser(HttpMessageType.REQUEST, ConcurrentLinkedQueue())
         val request = StringBuilder(" ".repeat(bufferOffset))
         request.append("""
             GET /blah HTTP/1.1\r
@@ -77,12 +74,12 @@ class Http1MessageParserTest {
         val actual = mutableListOf<String>()
 
         parser.feed(bytes, bufferOffset, bytes.size - bufferOffset, object : HttpMessageListener {
-            override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+            override fun onHeaders(exchange: HttpMessage) {
                 val req = exchange as HttpRequest
                 actual.add("Got request ${req.method} ${req.url} ${req.httpVersion} with ${exchange.headers().all().size} headers and body size ${req.bodyTransferSize()}")
             }
 
-            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
+            override fun onBodyBytes(exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                 actual.add("Received $type bytes: off=$offset len=$length")
                 if (type == BodyBytesType.CONTENT) {
                     val content = String(array, offset, length)
@@ -92,11 +89,11 @@ class Http1MessageParserTest {
                 }
             }
 
-            override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+            override fun onMessageEnded(exchange: HttpMessage) {
                 actual.add("Message ended")
             }
 
-            override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) {
+            override fun onError(exchange: HttpMessage, error: Exception) {
                 actual.add("Error: $error")
             }
 
@@ -115,7 +112,7 @@ class Http1MessageParserTest {
 
     @Test
     fun `chunked bodies where chunk goes over byte buffer edge are fine`() {
-        val parser = Http1MessageParser(DummyConnectionInfo(), HttpMessageType.REQUEST, ConcurrentLinkedQueue())
+        val parser = Http1MessageParser(HttpMessageType.REQUEST, ConcurrentLinkedQueue())
         val request = StringBuilder("""
             GET /blah HTTP/1.1\r
             content-type: text/plain;charset=utf-8\r
@@ -150,7 +147,7 @@ class Http1MessageParserTest {
 
 
         val listener = object : HttpMessageListener {
-            override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+            override fun onHeaders(exchange: HttpMessage) {
                 val req = exchange as HttpRequest
                 actual.add(
                     "Got request ${req.method} ${req.url} ${req.httpVersion} with ${
@@ -159,18 +156,18 @@ class Http1MessageParserTest {
                 )
             }
 
-            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
+            override fun onBodyBytes(exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                 actual.add("Received $type bytes: off=$offset len=$length")
                 if (type == BodyBytesType.CONTENT) {
                     receivedContent.write(array, offset, length)
                 }
             }
 
-            override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+            override fun onMessageEnded(exchange: HttpMessage) {
                 actual.add("Message ended")
             }
 
-            override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) {
+            override fun onError(exchange: HttpMessage, error: Exception) {
                 actual.add("Error: $error")
             }
 
@@ -195,7 +192,7 @@ class Http1MessageParserTest {
     @ParameterizedTest
     @ValueSource(ints = [1, 2, 3, 11, 20, 1000])
     fun `chunked bodies can span multiple chunks`(bytesPerFeed: Int) {
-        val parser = Http1MessageParser(DummyConnectionInfo(), HttpMessageType.REQUEST, ConcurrentLinkedQueue())
+        val parser = Http1MessageParser(HttpMessageType.REQUEST, ConcurrentLinkedQueue())
         val request = StringBuilder("""
             GET /blah HTTP/1.1\r
             content-type: text/plain;charset=utf-8\r
@@ -217,7 +214,7 @@ class Http1MessageParserTest {
 
 
         val listener = object : HttpMessageListener {
-            override fun onHeaders(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+            override fun onHeaders(exchange: HttpMessage) {
                 val req = exchange as HttpRequest
                 actual.add(
                     "Got request ${req.method} ${req.url} ${req.httpVersion} with ${
@@ -227,7 +224,7 @@ class Http1MessageParserTest {
                 req.writeTo(receivedBytes)
             }
 
-            override fun onBodyBytes(connection: ConnectionInfo, exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
+            override fun onBodyBytes(exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int) {
                 receivedBytes.write(array, offset, length)
                 if (type == BodyBytesType.CONTENT) {
                     receivedContent.write(array, offset, length)
@@ -236,11 +233,11 @@ class Http1MessageParserTest {
                 }
             }
 
-            override fun onMessageEnded(connectionInfo: ConnectionInfo, exchange: HttpMessage) {
+            override fun onMessageEnded(exchange: HttpMessage) {
                 actual.add("Message ended")
             }
 
-            override fun onError(connectionInfo: ConnectionInfo, exchange: HttpMessage, error: Exception) {
+            override fun onError(exchange: HttpMessage, error: Exception) {
                 actual.add("Error: $error")
             }
 
@@ -262,19 +259,6 @@ class Http1MessageParserTest {
         val trailers = HttpHeaders.parse(receivedTrailers.toByteArray())
         assertThat(trailers.size(), equalTo(1))
         assertThat(trailers.getAll("trailer"), contains("hello"))
-    }
-
-
-
-    private class DummyConnectionInfo : ConnectionInfo {
-        override fun sslContext(): SSLContext {
-            TODO("Not yet implemented")
-        }
-
-        override fun targetAddress(): InetSocketAddress {
-            TODO("Not yet implemented")
-        }
-
     }
 
 }
