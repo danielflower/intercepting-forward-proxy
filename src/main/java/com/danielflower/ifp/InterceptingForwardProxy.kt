@@ -86,10 +86,12 @@ class InterceptingForwardProxy private constructor(
     }
 
     private fun handleClientSocket(clientSocket:Socket) = Runnable {
+        var description : String? = null
         try {
             // Read just the first line, which is in plaintext (rest of input is expected to be encrypted)
             val requestLine = BufferedReader(InputStreamReader(clientSocket.getInputStream())).readLine()
-            log.info("Handling ${clientSocket.remoteSocketAddress} with requestLine $requestLine")
+            description = "${clientSocket.remoteSocketAddress} with requestLine $requestLine"
+            log.info("Handling $description")
 
             if (requestLine == null) {
                 clientSocket.close()
@@ -116,7 +118,8 @@ class InterceptingForwardProxy private constructor(
 
             }
         } catch (e: Exception) {
-            log.error("Error while handling client socket", e)
+            log.error("Error while handling client socket${if (description == null) "" else " $description"}", e)
+            clientSocket.closeQuietly()
         }
 
     }
