@@ -261,4 +261,56 @@ class Http1MessageParserTest {
         assertThat(trailers.getAll("trailer"), contains("hello"))
     }
 
+    @Test
+    fun `empty header values are discarded`() {
+        val parser = Http1MessageParser(HttpMessageType.REQUEST, ConcurrentLinkedQueue())
+        val request = """
+            GET /blah HTTP/1.1\r
+            host: example.org\r
+            some-header1: ${'\t'} header-1-value-1 ${'\t'} \r
+            ignored-header: \r
+            some-header1:header-1-value-2\r
+            \r
+            
+        """.trimIndent().replace("\\r", "\r")
+
+
+        val actual = mutableListOf<String>()
+
+        val listener = object : HttpMessageListener {
+            override fun onHeaders(exchange: HttpMessage) {
+                val req = exchange as HttpRequest
+                for (pair in req.headers().all()) {
+                    actual.add(pair.first + "=" + pair.second)
+                }
+            }
+
+            override fun onBodyBytes(
+                exchange: HttpMessage, type: BodyBytesType, array: ByteArray, offset: Int, length: Int
+            ) {
+                actual.add("Got body bytes")
+            }
+
+            override fun onMessageEnded(exchange: HttpMessage) {
+                actual.add("Message ended")
+            }
+
+            override fun onError(exchange: HttpMessage, error: Exception) {
+                actual.add("Error: $error")
+            }
+
+        }
+        val requestBytes = request.toByteArray(StandardCharsets.US_ASCII)
+        parser.feed(requestBytes, 0, requestBytes.size, listener)
+
+        assertThat("Events:\n\t" + actual.joinToString("\n\t"), actual, contains(
+            "host=example.org",
+            "some-header1=header-1-value-1",
+            "some-header1=header-1-value-2",
+            "Message ended",
+        ))
+    }
+
+
+
 }
