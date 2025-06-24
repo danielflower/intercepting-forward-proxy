@@ -121,15 +121,10 @@
             <plugin>
                 <groupId>com.github.danielflower.mavenplugins</groupId>
                 <artifactId>multi-module-maven-release-plugin</artifactId>
-                <version>3.6.4</version>
+                <version>3.8.0</version>
                 <configuration>
-                    <releaseGoals>
-                        <releaseGoal>clean</releaseGoal>
-                        <releaseGoal>deploy</releaseGoal>
-                    </releaseGoals>
                     <releaseProfiles>
                         <releaseProfile>release</releaseProfile>
-                        <releaseProfile>gpg</releaseProfile>
                     </releaseProfiles>
                 </configuration>
             </plugin>
@@ -196,15 +191,11 @@
                                     <goal>sign</goal>
                                 </goals>
                                 <configuration>
-                                    <gpgArguments>
-                                        <arg>--pinentry-mode</arg>
-                                        <arg>loopback</arg>
-                                    </gpgArguments>
+                                    <signer>bc</signer>
                                 </configuration>
                             </execution>
                         </executions>
                     </plugin>
-
                 </plugins>
             </build>
         </profile>
