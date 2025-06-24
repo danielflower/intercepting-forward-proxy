@@ -13,7 +13,9 @@ data class HttpHeaders(
     ) {
     internal fun hasChunkedBody() = hasHeaderValue("transfer-encoding", "chunked")
     fun contentLength(): Long? = header("content-length")?.toLongOrNull()
-    fun header(name: String): String? = headers.firstOrNull { it.first == name }?.second
+    fun get(name: String): String? = headers.firstOrNull { it.first == name }?.second
+    @Deprecated("Use get(String) instead", replaceWith = ReplaceWith("get(name)"))
+    fun header(name: String): String? = get(name)
     fun all() : List<Pair<String,String>> = headers
     fun getAll(name: String): List<String> = headers.filter { it.first == name }.map { it.second }
     fun hasHeader(name: String) = headers.any { it.first == name }
@@ -72,6 +74,13 @@ data class HttpHeaders(
         sb.append("]")
         return sb.toString()
     }
+
+    /**
+     * Removes all headers with the given name
+     *
+     * @return `true` if one or more headers were returned; `false` if there were no headers with this name
+     */
+    fun removeHeader(name: String) = headers.removeAll { it.first == name.lowercase() }
 
 
     companion object {

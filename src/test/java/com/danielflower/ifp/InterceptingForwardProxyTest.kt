@@ -46,7 +46,7 @@ class InterceptingForwardProxyTest {
         try {
             val listener = object : ConnectionInterceptor {
 
-                override fun acceptConnection(clientSocket: Socket, method: String, requestTarget: String, httpVersion: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
+                override fun acceptConnection(clientSocket: Socket, method: String, requestTarget: String, httpVersion: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), proxyServerSslContext)
 
                 override fun onRequestHeadersReady(connection: ConnectionInfo, request: HttpRequest) {
                     request.headers().addHeader("added-by-interceptor", "it was")
@@ -73,11 +73,9 @@ class InterceptingForwardProxyTest {
         }
     }
 
-
-
-
-    @Test
-    fun `the destination server can be changed`() {
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `the destination server can be changed`(proxyServerNames: Boolean) {
 
         // we start target at a local host url
         // then request to somewhere else (example.org url)
@@ -96,9 +94,11 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(InetSocketAddress("localhost", target.uri().port), serverSslContext)
+                ) = ConnectionInfoImpl(InetSocketAddress("localhost", target.uri().port), proxyServerSslContext)
             }
-            InterceptingForwardProxy.start(InterceptingForwardProxyConfig(),  listener).use { proxy ->
+            val config = InterceptingForwardProxyConfig()
+            config.proxyServerNames = proxyServerNames
+            InterceptingForwardProxy.start(config,  listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 val body = "0123456789-".repeat(10)
                 client.call(
@@ -156,7 +156,7 @@ class InterceptingForwardProxyTest {
     @Test
     fun `it can proxy unspecified length HTTP 1_0 response bodies`() {
 
-        val target = serverSslContext.serverSocketFactory.createServerSocket(0) as SSLServerSocket
+        val target = proxyServerSslContext.serverSocketFactory.createServerSocket(0) as SSLServerSocket
 
         val oldStyleServerUrl = URI("https://localhost:${target.localPort}")
         val acceptThread = Thread {
@@ -565,7 +565,7 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), serverSslContext)
+                ) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(requestTarget), proxyServerSslContext)
 
                 override fun onConnectionEnded(
                     connection: ConnectionInfo,
@@ -607,7 +607,7 @@ class InterceptingForwardProxyTest {
             classpathPath = "/test-certs/ca.p12",
             password = "password".toCharArray()
         )
-        val serverSslContext = InterceptingForwardProxy.createSSLContext(
+        val proxyServerSslContext = InterceptingForwardProxy.createSSLContext(
             classpathPath = "/test-certs/proxy-server.p12",
             password = "password".toCharArray(),
             trustManager = trustManager
@@ -640,7 +640,7 @@ class InterceptingForwardProxyTest {
             override fun sslContext() = sslContext
             override fun targetAddress() = targetAddress
             companion object {
-                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(target), serverSslContext)
+                fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(target), proxyServerSslContext)
 
             }
         }
