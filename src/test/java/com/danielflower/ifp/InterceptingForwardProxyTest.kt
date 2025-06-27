@@ -26,6 +26,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SNIServerName
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
@@ -94,10 +95,13 @@ class InterceptingForwardProxyTest {
                     method: String,
                     requestTarget: String,
                     httpVersion: String
-                ) = ConnectionInfoImpl(InetSocketAddress("localhost", target.uri().port), proxyServerSslContext)
+                ) = ConnectionInfoImpl(
+                    InetSocketAddress(/* hostname = */ "localhost", /* port = */ target.uri().port),
+                    proxyServerSslContext,
+                    proxyServerNames,
+                )
             }
             val config = InterceptingForwardProxyConfig()
-            config.proxyServerNames = proxyServerNames
             InterceptingForwardProxy.start(config,  listener).use { proxy ->
                 val client = okHttpClient(proxy)
                 val body = "0123456789-".repeat(10)
@@ -636,12 +640,15 @@ class InterceptingForwardProxyTest {
         data class ConnectionInfoImpl(
             val targetAddress: InetSocketAddress,
             val sslContext: SSLContext,
+            val proxySniNames: Boolean = true,
         ) : ConnectionInfo {
             override fun sslContext() = sslContext
             override fun targetAddress() = targetAddress
+            override fun targetSniServerNames(clientSniServerNames: List<SNIServerName>): List<SNIServerName>? {
+                return if (proxySniNames) clientSniServerNames else null
+            }
             companion object {
                 fun fromTarget(target: String) = ConnectionInfoImpl(ConnectionInfo.requestTargetToSocketAddress(target), proxyServerSslContext)
-
             }
         }
     }

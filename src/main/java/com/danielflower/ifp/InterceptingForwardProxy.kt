@@ -21,7 +21,6 @@ class InterceptingForwardProxy private constructor(
     private val executorService: ExecutorService,
     private val shutdownExecutorOnClose: Boolean,
     private val listener: ConnectionInterceptor,
-    private val proxyServerNames: Boolean,
 ) : AutoCloseable {
     private var acceptThread: Thread? = null
     private var isRunning = true
@@ -44,9 +43,8 @@ class InterceptingForwardProxy private constructor(
             val shutdownExecutorOnClose = config.shutdownExecutorOnClose ?: true
 
             val socketServer = ServerSocket(port, backlog, bindAddress)
-            val proxyServerNames = config.proxyServerNames ?: false
             val proxy = InterceptingForwardProxy(
-                socketServer, executorService, shutdownExecutorOnClose, connectionInterceptor, proxyServerNames
+                socketServer, executorService, shutdownExecutorOnClose, connectionInterceptor
             )
             proxy.start()
             return proxy
@@ -148,14 +146,13 @@ class InterceptingForwardProxy private constructor(
         val sslTargetSocket = ssf.createSocket(targetSocket, dest.hostString, dest.port, true) as SSLSocket
         sslTargetSocket.useClientMode = true
 
-        if (proxyServerNames) {
-            val clientRequestedServerNames = (sslClientSocket.session as? ExtendedSSLSession)?.requestedServerNames
-            if (clientRequestedServerNames?.isNotEmpty() == true) {
-                log.info("Setting server names on target socket{}", clientRequestedServerNames)
-                val targetParams = sslTargetSocket.sslParameters
-                targetParams.serverNames = clientRequestedServerNames
-                sslTargetSocket.sslParameters = targetParams
-            }
+        val clientSniServerNames: List<SNIServerName> = (sslClientSocket.session as? ExtendedSSLSession)?.requestedServerNames ?: emptyList()
+        val targetSniServerNames = connectionInfo.targetSniServerNames(clientSniServerNames)
+        if (targetSniServerNames?.isNotEmpty() == true) {
+            log.info("Setting server names on target socket {}", targetSniServerNames)
+            val targetParams = sslTargetSocket.sslParameters
+            targetParams.serverNames = clientSniServerNames
+            sslTargetSocket.sslParameters = targetParams
         }
 
         sslTargetSocket.addHandshakeCompletedListener(connectionInfo::onTargetHandshakeComplete)
@@ -351,13 +348,6 @@ class InterceptingForwardProxyConfig {
      * If `true`, then when [InterceptingForwardProxy.close] is called the executorServer will also be closed. Default is `true`.
      */
     var shutdownExecutorOnClose: Boolean? = null
-
-    /**
-     * If `true`, the proxy will forward any Server Name Indication (SNI) values received during the
-     * client's TLS handshake to the target server. This is useful when the upstream server requires SNI
-     * to select the correct certificate or virtual host. Defaults to `false`.
-     */
-    var proxyServerNames: Boolean? = true
 }
 
 
@@ -369,6 +359,16 @@ interface ConnectionInfo {
     }
     fun onTargetHandshakeComplete(event: HandshakeCompletedEvent) {
         log.info("Handshake to ${event.socket} for ${targetAddress()} complete with cipher ${event.cipherSuite}")
+    }
+
+    /**
+     * Specifies a way to map the requested SNI names from the client to the target.
+     *
+     * The default implementation just forwards client-requested server names to the destination.
+     * Return an empty list or null to not specify any SNI headers
+     */
+    fun targetSniServerNames(clientSniServerNames: List<SNIServerName>): List<SNIServerName>? {
+        return clientSniServerNames
     }
 
     companion object {
